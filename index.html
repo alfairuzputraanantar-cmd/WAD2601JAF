@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Luxury | Buyer is King</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <link href="style.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+<body class="bg-black text-gray-200 h-screen flex flex-col">
+    <div class="floating-particles" id="particles"></div>
+    
+    <div class="chat-container flex flex-col h-screen">
+        <header class="glass-morphism p-6 border-b gold-border flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 rounded-full gold-bg flex items-center justify-center">
+                    <svg class="w-8 h-8 text-black" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2L2 7v10c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-10-5z"/>
+                    </svg>
+                </div>
+                <h1 class="text-3xl font-black tracking-wider gold-text uppercase" style="font-family: 'Orbitron', sans-serif;">Local Luxury</h1>
+            </div>
+            <div id="db-status" class="text-xs uppercase text-green-400 font-semibold flex items-center gap-2">
+                <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                Kingdom Ready
+            </div>
+        </header>
+
+        <main id="chat-window" class="flex-1 overflow-y-auto p-6 space-y-6">
+            <div class="servant-bubble p-6 max-w-[85%] shadow-2xl">
+                <div class="flex items-start gap-3">
+                    <div class="w-8 h-8 rounded-full gold-bg flex items-center justify-center flex-shrink-0 mt-1">
+                        <svg class="w-5 h-5 text-black" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <p class="text-lg font-semibold mb-2">Welcome, Your Majesty.</p>
+                        <p class="text-gray-300">I am your personal food curator. My database is ready to serve your culinary desires.</p>
+                        <div class="mt-4 p-4 glass-morphism rounded-lg">
+                            <p class="text-sm gold-text font-semibold mb-2">Try commands like:</p>
+                            <div class="flex flex-wrap gap-2">
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Something sweet"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Cheap and filling"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Luxury experience"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Simple and quick"</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <div id="result-area" class="hidden p-6 glass-morphism border-t-2 gold-border">
+            <div class="text-center mb-4">
+                <p class="text-sm gold-text font-bold uppercase tracking-widest">Royal Recommendation</p>
+                <div class="w-24 h-1 gold-bg mx-auto mt-2 rounded-full"></div>
+            </div>
+            <div id="winner-container"></div>
+        </div>
+
+        <footer class="glass-morphism p-6 border-t gold-border">
+            <div class="flex gap-3">
+                <input type="text" id="user-input" placeholder="Command your culinary experience..." 
+                    class="flex-1 luxury-input p-4 rounded-xl text-white placeholder-gray-500">
+                <button id="send-btn" class="luxury-button text-black font-bold px-8 py-4 rounded-xl font-semibold tracking-wide">
+                    <span class="flex items-center gap-2">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                        </svg>
+                        DISCOVER
+                    </span>
+                </button>
+            </div>
+        </footer>
+    </div>
+
+
+    <script src="script.js"></script>
+
+</body>
+</html>
