@@ -888,3 +888,128 @@ input[type="radio"]:hover {
     font-size: 0.875rem;
   }
 }
+
+/* History modal scrollbar */
+#history-modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+#history-modal-body::-webkit-scrollbar-track {
+  background: #000;
+  border-radius: 10px;
+}
+
+#history-modal-body::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+#history-modal-body::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Success modal scrollable */
+#success-modal {
+  align-items: flex-start !important;
+  padding: 20px;
+  overflow-y: auto !important;
+}
+
+#success-modal > div {
+  max-height: 90vh;
+  overflow-y: auto;
+  margin: auto;
+}
+
+#success-modal > div::-webkit-scrollbar {
+  width: 6px;
+}
+
+#success-modal > div::-webkit-scrollbar-track {
+  background: #000;
+  border-radius: 10px;
+}
+
+#success-modal > div::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+/* Map lebih gede */
+#checkout-map {
+  height: 350px !important;
+}
+
+/* Scrollbar checkout modal hitam */
+#checkout-modal::-webkit-scrollbar,
+#checkout-modal > div::-webkit-scrollbar {
+  width: 6px;
+}
+
+#checkout-modal::-webkit-scrollbar-track,
+#checkout-modal > div::-webkit-scrollbar-track {
+  background: #000;
+  border-radius: 10px;
+}
+
+#checkout-modal::-webkit-scrollbar-thumb,
+#checkout-modal > div::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+#checkout-modal::-webkit-scrollbar-thumb:hover,
+#checkout-modal > div::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Map lebih lebar */
+#checkout-map-container,
+#checkout-map {
+  width: 100% !important;
+  min-width: 100% !important;
+}
+
+/* Map persegi & full width */
+#checkout-map-container {
+  width: 100% !important;
+}
+
+#checkout-map {
+  height: 300px !important;
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+}
+
+/* Scrollbar checkout hitam */
+#checkout-modal *::-webkit-scrollbar {
+  width: 6px;
+}
+
+#checkout-modal *::-webkit-scrollbar-track {
+  background: #000;
+  border-radius: 10px;
+}
+
+#checkout-modal *::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+/* Global scrollbar hitam */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
