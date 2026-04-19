@@ -1,4 +1,6 @@
-// 1. Konfigurasi Firebase
+// ============================================================
+// FIREBASE CONFIG & INIT
+// ============================================================
 const firebaseConfig = {
   apiKey: "AIzaSyCIYc8Epfu3jmrewyRaVGc4ISm7qKxG03k",
   authDomain: "localluxury-cb0d7.firebaseapp.com",
@@ -9,258 +11,245 @@ const firebaseConfig = {
   measurementId: "G-DHC0N06PZB"
 };
 
-// 2. Inisialisasi Firebase (Gaya Compat/Lama agar cocok dengan HTML)
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 
-async function sendToOllama(message) {
-  const res = await fetch("/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      message: message
-    })
-  });
+// ============================================================
+// SESSION ID — unique per browser tab so buyer/seller
+// messages can be distinguished in the same collection
+// ============================================================
+const SESSION_ID = localStorage.getItem("buyerSessionId") || (() => {
+  const id = "buyer_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+  localStorage.setItem("buyerSessionId", id);
+  return id;
+})();
 
-  const data = await res.json();
-  return data.reply;
+// ============================================================
+// MESSAGE COLLECTION REF — must match what Seller uses
+// ============================================================
+const messagesRef = db.collection("chats/session_01/messages");
+
+// ============================================================
+// RENDERED MESSAGE TRACKING — prevent duplicate renders
+// ============================================================
+const renderedIds = new Set();
+
+// ============================================================
+// HELPER: format timestamp
+// ============================================================
+function formatTime(ts) {
+  const d = ts ? ts.toDate() : new Date();
+  return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
+// ============================================================
+// SEND A TEXT MESSAGE (BUYER → FIREBASE)
+// ============================================================
+async function sendMessage() {
+  const input = document.getElementById("user-input");
+  const text = input.value.trim();
+  if (!text) return;
 
-// --- LOGIKA UTAMA ---
-
-// Fungsi mencari makanan (handleSearch)
-async function handleSearch() {
-  const userInput = document.getElementById("user-input");
-  const message = userInput.value.trim();
-  if (!message) return;
-
-  // tampilkan pesan user
-  renderMessage(message, "king");
-  userInput.value = "";
-
-  // loading
-  renderMessage("Let me consult the royal oracle...", "servant");
+  input.value = "";
+  input.disabled = true;
 
   try {
-    const res = await fetch("/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ message })
-  });
-
-  const data = await res.json();
-  if (data.products && data.products.length > 0) {
-  renderMessage(`I found ${data.products.length} product(s):`, "servant");
-
-  data.products.forEach(product => {
-    renderProductCard(product);
-  });
-} else {
-  renderMessage("No matching products found.", "servant");
-}
-
-    removeLastMessage(); // hapus loading
-    renderMessage(data.reply, "servant");
-
-  } catch (error) {
-    console.error(error);
-    removeLastMessage();
-    renderMessage("❌ The oracle cannot be reached.", "servant");
+    await messagesRef.add({
+      text,
+      sender: "buyer",
+      sessionId: SESSION_ID,
+      type: "text",
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch (err) {
+    console.error("Failed to send message:", err);
+    // Restore input on error
+    input.value = text;
+  } finally {
+    input.disabled = false;
+    input.focus();
   }
 }
 
-// Fungsi menampilkan pesan di chat
-function renderMessage(message, sender) {
-    const chatWindow = document.getElementById('chat-window');
-    const div = document.createElement('div');
-    div.className = `${sender}-bubble p-6 max-w-[85%] animate-fadeIn`;
-    div.innerHTML = `<p class="${sender === 'king' ? 'text-right' : 'text-left'}">${message}</p>`;
-    chatWindow.appendChild(div);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
+// ============================================================
+// RENDER: plain text bubble
+// ============================================================
+function renderTextBubble(msg, isBuyer) {
+  const chatWindow = document.getElementById("chat-window");
+  const row = document.createElement("div");
+  row.className = `chat-msg-row ${isBuyer ? "chat-msg-row--buyer" : "chat-msg-row--seller"}`;
+
+  const ts = formatTime(msg.timestamp);
+
+  if (isBuyer) {
+    row.innerHTML = `
+      <div class="chat-bubble chat-bubble--buyer">
+        <span>${escapeHtml(msg.text)}</span>
+        <span class="chat-ts">${ts}</span>
+      </div>`;
+  } else {
+    row.innerHTML = `
+      <div class="chat-bubble chat-bubble--seller">
+        <span class="chat-sender-label">🛒 Seller</span>
+        <span>${escapeHtml(msg.text)}</span>
+        <span class="chat-ts" style="color:rgba(255,255,255,0.3)">${ts}</span>
+      </div>`;
+  }
+
+  chatWindow.appendChild(row);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
-// Fungsi menampilkan kartu rekomendasi
-function showWinner(product) {
-    const resultArea = document.getElementById('result-area');
-    const winnerContainer = document.getElementById('winner-container');
-    
-    winnerContainer.innerHTML = `
-        <div class="p-6 bg-black/20 rounded-xl border gold-border winner-card">
-            <h3 class="text-2xl gold-text font-bold mb-2">${product.name}</h3>
-            <p class="text-lg text-gray-300 mb-4">Price: Rp ${product.price.toLocaleString()}</p>
-            <div class="flex gap-3">
-                <button onclick="addToCart(${JSON.stringify(product).replace(/"/g, '&quot;')})" class="flex-1 luxury-button text-black font-bold py-3 rounded-xl font-semibold">
-                    <span class="flex items-center justify-center gap-2">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
-                        </svg>
-                        Add to Cart
-                    </span>
-                </button>
-            </div>
+// ============================================================
+// RENDER: interactive product card (from Seller)
+// stock constraints + Add-to-Cart
+// ============================================================
+function renderProductCard(msg) {
+  const chatWindow = document.getElementById("chat-window");
+
+  // Seller pushes product fields FLAT on the doc root (not nested in msg.product)
+  // Fields: name, price, info (description), stock, productId, tags
+  const name  = msg.name  || "Item";
+  const price = typeof msg.price === "number" ? msg.price : 0;
+  const info  = msg.info  || "";          // seller uses 'info' for description
+  const stock = typeof msg.stock === "number" ? msg.stock : 99;
+  const outOfStock = stock <= 0;
+  const ts = formatTime(msg.timestamp);
+
+  // Unique ID per card for DOM targeting
+  const cardId = "card_" + (msg.id || Date.now() + Math.random()).toString().replace(/\./g, "_");
+
+  const row = document.createElement("div");
+  row.className = "chat-msg-row chat-msg-row--seller";
+  row.id = cardId + "_row";
+
+  // Stock badge helper
+  function stockBadgeHtml(s) {
+    if (s <= 0) return `<span class="stock-badge stock-badge--oos">Out of Stock</span>`;
+    if (s <= 5) return `<span class="stock-badge stock-badge--low">⚠️ Only <strong>${s}</strong> left!</span>`;
+    return `<span class="stock-badge stock-badge--ok">✅ ${s} in stock</span>`;
+  }
+
+  const safeName  = escapeHtml(name);
+  const safeInfo  = escapeHtml(info);
+
+  row.innerHTML = `
+    <div>
+      <span class="seller-label" style="display:block;margin-bottom:6px;padding-left:4px;">📦 Product Recommendation</span>
+      <div class="food-rec-card" style="position:relative;">
+
+        <!-- Image area -->
+        <div class="food-rec-img">
+          <span style="font-size:40px;">🍽️</span>
+          <span class="food-rec-seller-badge">SELLER PICK</span>
         </div>
-    `;
-    resultArea.classList.remove('hidden');
-}
 
-// Fungsi menampilkan multiple hasil sebagai chat message
-function showMultipleResults(products) {
-    const chatWindow = document.getElementById('chat-window');
-    
-    let productsHTML = '<div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">';
-    
-    products.forEach(product => {
-        productsHTML += `
-            <div class="p-3 bg-black/20 rounded-lg border gold-border product-card hover:scale-105 transition-transform">
-                <h4 class="text-sm gold-text font-bold mb-1">${product.name}</h4>
-                <p class="text-xs text-gray-300 mb-2">Rp ${product.price.toLocaleString()}</p>
-                <button onclick="addToCart(${JSON.stringify(product).replace(/"/g, '&quot;')})" class="w-full luxury-button text-black font-bold py-1.5 rounded text-xs">
-                    <span class="flex items-center justify-center gap-1">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
-                        </svg>
-                        Add to Cart
-                    </span>
-                </button>
+        <!-- Info body -->
+        <div style="padding:12px 14px;display:flex;flex-direction:column;gap:8px;">
+
+          <!-- Name & description -->
+          <div>
+            <p style="color:#D4AF37;font-weight:700;font-size:15px;margin-bottom:2px;">${safeName}</p>
+            ${safeInfo ? `<p style="color:#9ca3af;font-size:12px;">${safeInfo}</p>` : ""}
+          </div>
+
+          <!-- Price -->
+          <p style="color:#e5e7eb;font-size:14px;font-weight:600;">Rp ${price.toLocaleString("id-ID")}</p>
+
+          <!-- Live stock badge -->
+          <div id="${cardId}_stockBadge">${stockBadgeHtml(stock)}</div>
+
+          <!-- Qty selector + Add to cart -->
+          <div style="display:flex;gap:8px;align-items:center;margin-top:4px;">
+            <div class="food-rec-qty">
+              <button id="${cardId}_minus" onclick="changeQty('${cardId}',-1,${stock})"
+                ${outOfStock ? 'disabled style="opacity:0.4"' : ""}>−</button>
+              <span id="${cardId}_qty">1</span>
+              <button id="${cardId}_plus" onclick="changeQty('${cardId}',1,${stock})"
+                ${outOfStock || stock <= 1 ? 'disabled style="opacity:0.4"' : ""}>+</button>
             </div>
-        `;
-    });
-    
-    productsHTML += '</div>';
-    
-    // Create servant message with products
-    const div = document.createElement('div');
-    div.className = 'servant-bubble p-4 max-w-[90%] animate-fadeIn';
-    div.innerHTML = `
-        <div class="flex items-start gap-3">
-            <div class="w-8 h-8 rounded-full gold-bg flex items-center justify-center flex-shrink-0 mt-1">
-                <svg class="w-5 h-5 text-black" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                </svg>
-            </div>
-            <div class="flex-1">
-                <p class="text-sm font-semibold mb-2">I found these royal delicacies for you, Your Majesty:</p>
-                ${productsHTML}
-            </div>
+            <button class="food-rec-add"
+                    id="${cardId}_addBtn"
+                    onclick="addRecToCart('${cardId}','${safeName}',${price},${stock})"
+                    ${outOfStock ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ""}>
+              ${outOfStock
+                ? "Out of Stock"
+                : `<svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> Add to Cart`}
+            </button>
+          </div>
+
+          <!-- Timestamp -->
+          <span style="font-size:10px;color:rgba(255,255,255,0.25);align-self:flex-end;">${ts}</span>
         </div>
-    `;
-    
-    chatWindow.appendChild(div);
-    chatWindow.scrollTop = chatWindow.scrollHeight;
+      </div>
+    </div>`;
+
+  chatWindow.appendChild(row);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+
+  // Flash the live status dot
+  const dot = document.querySelector("#db-status .w-2");
+  if (dot) {
+    dot.classList.add("pulse-flash");
+    setTimeout(() => dot.classList.remove("pulse-flash"), 700);
+  }
 }
 
-// 3. EVENT LISTENERS (Kunci Agar Tombol Berfungsi)
-document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('send-btn'); // ID Tombol Discover
-    const input = document.getElementById('user-input'); // ID Input Teks
-    const cartBtn = document.getElementById('cart-btn');
-    const closeCartBtn = document.getElementById('close-cart');
-    const clearCartBtn = document.getElementById('clear-cart-btn');
-    const checkoutBtn = document.getElementById('checkout-btn');
-    const cartOverlay = document.getElementById('cart-overlay');
+// ============================================================
+// QTY SELECTOR LOGIC (called from inline onclick)
+// ============================================================
+function changeQty(cardId, delta, maxStock) {
+  const qtyEl  = document.getElementById(cardId + "_qty");
+  const minusEl = document.getElementById(cardId + "_minus");
+  const plusEl  = document.getElementById(cardId + "_plus");
+  if (!qtyEl) return;
 
-    if (btn) {
-        btn.addEventListener('click', handleSearch);
-    }
+  let qty = parseInt(qtyEl.textContent, 10) + delta;
+  qty = Math.max(1, Math.min(maxStock, qty));
+  qtyEl.textContent = qty;
 
-    if (input) {
-        input.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handleSearch();
-        });
-    }
+  // Disable/enable +/- buttons at boundaries
+  minusEl.disabled = qty <= 1;
+  plusEl.disabled  = qty >= maxStock;
+  if (plusEl.disabled)  plusEl.style.opacity = "0.4";
+  else                  plusEl.style.opacity = "1";
+  if (minusEl.disabled) minusEl.style.opacity = "0.4";
+  else                  minusEl.style.opacity = "1";
+}
 
-    if (cartBtn) {
-        cartBtn.addEventListener('click', () => {
-            toggleCart();
-        });
-    }
+// ============================================================
+// ADD RECOMMENDED PRODUCT TO CART
+// ============================================================
+function addRecToCart(cardId, name, price, maxStock) {
+  const qtyEl = document.getElementById(cardId + "_qty");
+  const qty   = qtyEl ? parseInt(qtyEl.textContent, 10) : 1;
 
-    if (closeCartBtn) {
-        closeCartBtn.addEventListener('click', () => {
-            toggleCart();
-        });
-    }
+  if (qty < 1 || maxStock <= 0) return;
 
-    if (cartOverlay) {
-        cartOverlay.addEventListener('click', () => {
-            toggleCart();
-        });
-    }
+  // Add each unit as qty in cart (reuse existing addToCart logic)
+  const productObj = {
+    id: cardId,          // unique per card
+    name,
+    price,
+    stock: maxStock
+  };
 
-    if (clearCartBtn) {
-        clearCartBtn.addEventListener('click', clearCart);
-    }
+  addToCartWithQty(productObj, qty);
+}
 
-    if (checkoutBtn) {
-        checkoutBtn.addEventListener('click', () => {
-            openCheckout();
-        });
-    }
-
-    // Checkout modal event listeners
-    const closeCheckoutBtn = document.getElementById('close-checkout');
-    const placeOrderBtn = document.getElementById('place-order-btn');
-    const closeSuccessBtn = document.getElementById('close-success');
-
-    if (closeCheckoutBtn) {
-        closeCheckoutBtn.addEventListener('click', closeCheckout);
-    }
-
-    if (placeOrderBtn) {
-        placeOrderBtn.addEventListener('click', processOrder);
-    }
-
-    if (closeSuccessBtn) {
-        closeSuccessBtn.addEventListener('click', closeSuccess);
-    }
-
-    // Initialize cart count on page load
-    updateCartCount();
-    
-    // Also initialize cart display if sidebar is somehow visible
-    const sidebar = document.getElementById('cart-sidebar');
-    if (sidebar && sidebar.classList.contains('cart-sidebar-visible')) {
-        renderCart();
-    }
-});
-
-// 4. Cek apakah database kosong, jika ya isi data awal
-db.collection("products").limit(1).get().then(snapshot => {
-    if (snapshot.empty) {
-        const menu = [
-            { name: "Nasi Rendang Royal", price: 25000, tags: ["spicy", "filling"] },
-            { name: "Martabak Sweetness", price: 20000, tags: ["sweet", "dessert"] },
-            { name: "Sate Ayam Sultan", price: 30000, tags: ["luxury", "portion"] },
-            { name: "Gado-Gado Premium", price: 18000, tags: ["healthy", "vegetarian"] },
-            { name: "Bakso Urat Special", price: 22000, tags: ["spicy", "filling"] },
-            { name: "Es Teler Deluxe", price: 15000, tags: ["sweet", "dessert", "cold"] },
-            { name: "Ayam Bakar Madu", price: 28000, tags: ["luxury", "sweet"] },
-            { name: "Mie Goreng Special", price: 16000, tags: ["quick", "filling"] },
-            { name: "Soto Ayam Premium", price: 19000, tags: ["warm", "comfort"] },
-            { name: "Pisang Goreng Crispy", price: 12000, tags: ["sweet", "snack"] }
-        ];
-        menu.forEach(item => db.collection("products").add(item));
-    }
-});
-
-// ADD TO CART LOGIC
-function addToCart(product) {
+// addToCartWithQty — extended version of addToCart that accepts quantity
+function addToCartWithQty(product, qty) {
   let cart = JSON.parse(localStorage.getItem("cart")) || [];
-  const existingItem = cart.find(item => item.productId === product.id);
+  const existing = cart.find(i => i.productId === product.id);
 
-  if (existingItem) {
-    existingItem.quantity += 1;
+  if (existing) {
+    existing.quantity += qty;
   } else {
     cart.push({
       productId: product.id,
       name: product.name,
       price: product.price,
-      quantity: 1
+      quantity: qty
     });
   }
 
@@ -268,441 +257,444 @@ function addToCart(product) {
   updateCartCount();
   renderCart();
   animateCart();
-  
-  // Show notification popup
-  showCartNotification(product.name);
+  showCartNotification(`${qty}× ${product.name}`);
 }
 
-function showCartNotification(productName) {
-  const notification = document.getElementById('cart-notification');
-  const notificationText = document.getElementById('notification-text');
-  
-  // Clear any existing timeout
-  if (window.notificationTimeout) {
-    clearTimeout(window.notificationTimeout);
-  }
-  
-  // Update notification text
-  notificationText.textContent = `${productName} added to cart!`;
-  
-  // Remove show class to ensure clean state
-  notification.classList.remove('show');
-  
-  // Force a reflow to ensure the class removal takes effect
-  void notification.offsetWidth;
-  
-  // Add show class to trigger animation
-  notification.classList.add('show');
-  
-  // Hide after 3 seconds
+// ============================================================
+// FIREBASE REAL-TIME LISTENER — onSnapshot
+// ============================================================
+function startChatListener() {
+  messagesRef
+    .orderBy("timestamp", "asc")
+    .onSnapshot(snapshot => {
+      snapshot.docChanges().forEach(change => {
+        if (change.type !== "added") return;
+
+        const docId = change.doc.id;
+        if (renderedIds.has(docId)) return;
+        renderedIds.add(docId);
+
+        const msg   = { id: docId, ...change.doc.data() };
+        const isBuyer = msg.sender === "buyer";
+
+        if (msg.type === "product" && !isBuyer) {
+          // Seller pushed a product recommendation → render card
+          renderProductCard(msg);
+        } else {
+          // Plain text from either side
+          renderTextBubble(msg, isBuyer);
+        }
+      });
+    }, err => {
+      console.error("Chat listener error:", err);
+    });
+}
+
+// ============================================================
+// ESCAPE HTML (XSS-safe rendering)
+// ============================================================
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// ============================================================
+// CART LOGIC
+// ============================================================
+function addToCart(product) {
+  addToCartWithQty(product, 1);
+}
+
+function showCartNotification(text) {
+  const notification = document.getElementById("cart-notification");
+  const notificationText = document.getElementById("notification-text");
+
+  if (window.notificationTimeout) clearTimeout(window.notificationTimeout);
+
+  notificationText.textContent = `${text} added to cart!`;
+  notification.classList.remove("show");
+  void notification.offsetWidth; // force reflow
+  notification.classList.add("show");
+
   window.notificationTimeout = setTimeout(() => {
-    notification.classList.remove('show');
+    notification.classList.remove("show");
   }, 3000);
 }
 
 function updateCartCount() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
-  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
-  const cartCountElement = document.getElementById('cart-count');
-  
-  if (cartCountElement) {
-    cartCountElement.textContent = totalItems;
-    // Show/hide badge based on count
-    if (totalItems > 0) {
-      cartCountElement.style.display = 'flex';
-    } else {
-      cartCountElement.style.display = 'none';
-    }
+  const total = cart.reduce((s, i) => s + i.quantity, 0);
+  const el = document.getElementById("cart-count");
+  if (el) {
+    el.textContent = total;
+    el.style.display = total > 0 ? "flex" : "none";
   }
 }
 
 function toggleCart() {
-  const sidebar = document.getElementById('cart-sidebar');
-  const overlay = document.getElementById('cart-overlay');
-  
-  if (sidebar && overlay) {
-    // Toggle custom CSS classes instead of Tailwind
-    if (sidebar.classList.contains('cart-sidebar-hidden')) {
-      sidebar.classList.remove('cart-sidebar-hidden');
-      sidebar.classList.add('cart-sidebar-visible');
-      overlay.classList.remove('hidden');
-    } else {
-      sidebar.classList.remove('cart-sidebar-visible');
-      sidebar.classList.add('cart-sidebar-hidden');
-      overlay.classList.add('hidden');
-    }
-    
-    if (sidebar.classList.contains('cart-sidebar-visible')) {
-      renderCart();
-    }
+  const sidebar = document.getElementById("cart-sidebar");
+  const overlay = document.getElementById("cart-overlay");
+  if (!sidebar || !overlay) return;
+
+  if (sidebar.classList.contains("cart-sidebar-hidden")) {
+    sidebar.classList.replace("cart-sidebar-hidden", "cart-sidebar-visible");
+    overlay.classList.remove("hidden");
+    renderCart();
+  } else {
+    sidebar.classList.replace("cart-sidebar-visible", "cart-sidebar-hidden");
+    overlay.classList.add("hidden");
   }
 }
 
 function animateCart() {
-  const cartIcon = document.getElementById("cartIcon");
-  cartIcon.classList.add("pulse");
-
-  setTimeout(() => {
-    cartIcon.classList.remove("pulse");
-  }, 400);
+  const icon = document.getElementById("cartIcon");
+  if (!icon) return;
+  icon.classList.add("pulse");
+  setTimeout(() => icon.classList.remove("pulse"), 400);
 }
 
 function renderCart() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
   const container = document.getElementById("cart-items");
-  const totalElement = document.getElementById("cart-total");
+  const totalEl   = document.getElementById("cart-total");
+  if (!container) return;
 
   if (cart.length === 0) {
     container.innerHTML = `
       <div class="text-center text-gray-400 py-8">
         <svg class="w-16 h-16 mx-auto mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/>
         </svg>
         <p>Your cart is empty</p>
-      </div>
-    `;
-    totalElement.textContent = "Rp 0";
+      </div>`;
+    totalEl.textContent = "Rp 0";
     return;
   }
 
-  container.innerHTML = "";
   let total = 0;
-
+  container.innerHTML = "";
   cart.forEach(item => {
-    const itemTotal = item.price * item.quantity;
-    total += itemTotal;
-    
+    const sub = item.price * item.quantity;
+    total += sub;
     container.innerHTML += `
       <div class="glass-morphism p-4 rounded-xl">
         <div class="flex justify-between items-start mb-3">
           <div class="flex-1">
-            <p class="gold-text font-semibold">${item.name}</p>
-            <p class="text-sm text-gray-400">Rp ${item.price.toLocaleString()} each</p>
+            <p class="gold-text font-semibold">${escapeHtml(item.name)}</p>
+            <p class="text-sm text-gray-400">Rp ${item.price.toLocaleString("id-ID")} each</p>
           </div>
           <button onclick="removeFromCart('${item.productId}')" class="text-red-400 hover:text-red-300">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
             </svg>
           </button>
         </div>
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <button onclick="updateQuantity('${item.productId}', -1)" class="w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center">
-              -
-            </button>
+            <button onclick="updateQuantity('${item.productId}',-1)"
+              class="w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center">−</button>
             <span class="w-8 text-center">${item.quantity}</span>
-            <button onclick="updateQuantity('${item.productId}', 1)" class="w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center">
-              +
-            </button>
+            <button onclick="updateQuantity('${item.productId}',1)"
+              class="w-8 h-8 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center">+</button>
           </div>
-          <p class="gold-text font-semibold">Rp ${itemTotal.toLocaleString()}</p>
+          <p class="gold-text font-semibold">Rp ${sub.toLocaleString("id-ID")}</p>
         </div>
-      </div>
-    `;
+      </div>`;
   });
 
-  totalElement.textContent = `Rp ${total.toLocaleString()}`;
+  totalEl.textContent = `Rp ${total.toLocaleString("id-ID")}`;
 }
 
 function updateQuantity(id, change) {
   let cart = JSON.parse(localStorage.getItem("cart")) || [];
-  const item = cart.find(item => item.productId === id);
-  
-  if (item) {
-    item.quantity += change;
-    if (item.quantity <= 0) {
-      cart = cart.filter(item => item.productId !== id);
-    }
-    localStorage.setItem("cart", JSON.stringify(cart));
-    updateCartCount();
-    renderCart();
-  }
+  const item = cart.find(i => i.productId === id);
+  if (!item) return;
+  item.quantity += change;
+  if (item.quantity <= 0) cart = cart.filter(i => i.productId !== id);
+  localStorage.setItem("cart", JSON.stringify(cart));
+  updateCartCount();
+  renderCart();
 }
 
 function clearCart() {
   localStorage.removeItem("cart");
   updateCartCount();
   renderCart();
-  
-  // Show confirmation message
-  const chatWindow = document.getElementById('chat-window');
-  const div = document.createElement('div');
-  div.className = 'servant-bubble p-4 max-w-[85%] animate-fadeIn';
-  div.innerHTML = `
-    <div class="flex items-start gap-3">
-      <div class="w-8 h-8 rounded-full gold-bg flex items-center justify-center flex-shrink-0 mt-1">
-        <svg class="w-5 h-5 text-black" fill="currentColor" viewBox="0 0 24 24">
-          <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-        </svg>
-      </div>
-      <div>
-        <p class="text-sm font-semibold">Your royal cart has been cleared, Your Majesty.</p>
-      </div>
-    </div>
-  `;
-  chatWindow.appendChild(div);
-  chatWindow.scrollTop = chatWindow.scrollHeight;
 }
 
 function removeFromCart(id) {
   let cart = JSON.parse(localStorage.getItem("cart")) || [];
-  cart = cart.filter(item => item.productId !== id);
+  cart = cart.filter(i => i.productId !== id);
   localStorage.setItem("cart", JSON.stringify(cart));
   updateCartCount();
   renderCart();
 }
 
+// ============================================================
 // CHECKOUT FUNCTIONS
+// ============================================================
 function openCheckout() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
-  
-  if (cart.length === 0) {
-    alert('Your cart is empty! Add some items first.');
-    return;
-  }
-  
+  if (cart.length === 0) { alert("Your cart is empty! Add some items first."); return; }
   renderCheckoutItems();
   calculateCheckoutTotals();
-  
-  // Load saved address if exists
   loadSavedAddress();
-  
-  // Close cart sidebar and open checkout modal
   toggleCart();
-  
-  const checkoutModal = document.getElementById('checkout-modal');
-  checkoutModal.classList.remove('hidden');
-  // Trigger transition
-  setTimeout(() => {
-    checkoutModal.classList.add('show');
-  }, 10);
-  document.body.style.overflow = 'hidden';
+  const modal = document.getElementById("checkout-modal");
+  modal.classList.remove("hidden");
+  setTimeout(() => modal.classList.add("show"), 10);
+  document.body.style.overflow = "hidden";
 }
 
 function closeCheckout() {
-  // Save current address before closing
   saveCurrentAddress();
-  
-  const checkoutModal = document.getElementById('checkout-modal');
-  checkoutModal.classList.remove('show');
-  // Wait for transition to complete before hiding
-  setTimeout(() => {
-    checkoutModal.classList.add('hidden');
-  }, 300);
-  document.body.style.overflow = 'auto';
+  const modal = document.getElementById("checkout-modal");
+  modal.classList.remove("show");
+  setTimeout(() => modal.classList.add("hidden"), 300);
+  document.body.style.overflow = "auto";
 }
 
 function saveCurrentAddress() {
-  const addressData = {
-    fullName: document.getElementById('full-name').value,
-    phone: document.getElementById('phone').value,
-    address: document.getElementById('address').value,
-    city: document.getElementById('city').value,
-    postalCode: document.getElementById('postal-code').value
+  const data = {
+    fullName:   document.getElementById("full-name").value,
+    phone:      document.getElementById("phone").value,
+    address:    document.getElementById("address").value,
+    city:       document.getElementById("city").value,
+    postalCode: document.getElementById("postal-code").value
   };
-  
-  // Only save if at least one field is filled
-  if (addressData.fullName || addressData.phone || addressData.address) {
-    localStorage.setItem('savedAddress', JSON.stringify(addressData));
+  if (data.fullName || data.phone || data.address) {
+    localStorage.setItem("savedAddress", JSON.stringify(data));
   }
 }
 
 function loadSavedAddress() {
-  const savedAddress = localStorage.getItem('savedAddress');
-  
-  if (savedAddress) {
-    const addressData = JSON.parse(savedAddress);
-    let hasData = false;
-    
-    // Pre-fill form fields with saved data
-    if (addressData.fullName) {
-      document.getElementById('full-name').value = addressData.fullName;
-      hasData = true;
-    }
-    if (addressData.phone) {
-      document.getElementById('phone').value = addressData.phone;
-      hasData = true;
-    }
-    if (addressData.address) {
-      document.getElementById('address').value = addressData.address;
-      hasData = true;
-    }
-    if (addressData.city) {
-      document.getElementById('city').value = addressData.city;
-      hasData = true;
-    }
-    if (addressData.postalCode) {
-      document.getElementById('postal-code').value = addressData.postalCode;
-      hasData = true;
-    }
-    
-    // Show saved address indicator if data was loaded
-    if (hasData) {
-      const indicator = document.getElementById('address-saved-indicator');
-      if (indicator) {
-        indicator.classList.remove('hidden');
-      }
-    }
-  }
+  const raw = localStorage.getItem("savedAddress");
+  if (!raw) return;
+  const d = JSON.parse(raw);
+  let hasData = false;
+  if (d.fullName)   { document.getElementById("full-name").value = d.fullName; hasData = true; }
+  if (d.phone)      { document.getElementById("phone").value = d.phone; hasData = true; }
+  if (d.address)    { document.getElementById("address").value = d.address; hasData = true; }
+  if (d.city)       { document.getElementById("city").value = d.city; hasData = true; }
+  if (d.postalCode) { document.getElementById("postal-code").value = d.postalCode; hasData = true; }
+  if (hasData) document.getElementById("address-saved-indicator")?.classList.remove("hidden");
 }
 
 function renderCheckoutItems() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
   const container = document.getElementById("checkout-items");
-  
   container.innerHTML = "";
-  let subtotal = 0;
-  
   cart.forEach(item => {
-    const itemTotal = item.price * item.quantity;
-    subtotal += itemTotal;
-    
+    const sub = item.price * item.quantity;
     container.innerHTML += `
       <div class="flex justify-between items-center p-3 bg-black/30 rounded-lg">
         <div class="flex-1">
-          <p class="text-white font-semibold">${item.name}</p>
-          <p class="text-sm text-gray-400">${item.quantity} × Rp ${item.price.toLocaleString()}</p>
+          <p class="text-white font-semibold">${escapeHtml(item.name)}</p>
+          <p class="text-sm text-gray-400">${item.quantity} × Rp ${item.price.toLocaleString("id-ID")}</p>
         </div>
-        <p class="gold-text font-semibold">Rp ${itemTotal.toLocaleString()}</p>
-      </div>
-    `;
+        <p class="gold-text font-semibold">Rp ${sub.toLocaleString("id-ID")}</p>
+      </div>`;
   });
 }
 
 function calculateCheckoutTotals() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
-  const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const deliveryFee = 10000;
-  const tax = Math.round(subtotal * 0.1);
-  const total = subtotal + deliveryFee + tax;
-  
-  document.getElementById('checkout-subtotal').textContent = `Rp ${subtotal.toLocaleString()}`;
-  document.getElementById('checkout-tax').textContent = `Rp ${tax.toLocaleString()}`;
-  document.getElementById('checkout-total').textContent = `Rp ${total.toLocaleString()}`;
+  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+  const fee  = 10000;
+  const tax  = Math.round(subtotal * 0.1);
+  const total = subtotal + fee + tax;
+  document.getElementById("checkout-subtotal").textContent = `Rp ${subtotal.toLocaleString("id-ID")}`;
+  document.getElementById("checkout-tax").textContent      = `Rp ${tax.toLocaleString("id-ID")}`;
+  document.getElementById("checkout-total").textContent    = `Rp ${total.toLocaleString("id-ID")}`;
 }
 
 function validateForm() {
-  const fullName = document.getElementById('full-name').value.trim();
-  const phone = document.getElementById('phone').value.trim();
-  const address = document.getElementById('address').value.trim();
-  const city = document.getElementById('city').value.trim();
-  const postalCode = document.getElementById('postal-code').value.trim();
-  
-  if (!fullName || !phone || !address || !city || !postalCode) {
-    alert('Please fill in all required fields.');
-    return false;
-  }
-  
-  if (phone.length < 10) {
-    alert('Please enter a valid phone number.');
-    return false;
-  }
-  
+  const f = ["full-name","phone","address","city","postal-code"].map(id => document.getElementById(id).value.trim());
+  if (f.some(v => !v)) { alert("Please fill in all required fields."); return false; }
+  if (f[1].length < 10) { alert("Please enter a valid phone number."); return false; }
   return true;
 }
 
 function processOrder() {
-  if (!validateForm()) {
-    return;
-  }
-  
+  if (!validateForm()) return;
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
-  if (cart.length === 0) {
-    alert('Your cart is empty!');
-    return;
-  }
-  
-  // Save current address before processing order
+  if (cart.length === 0) { alert("Your cart is empty!"); return; }
   saveCurrentAddress();
-  
-  // Get form data
+
+  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+  const fee = 10000;
+  const tax = Math.round(subtotal * 0.1);
   const orderData = {
-    fullName: document.getElementById('full-name').value,
-    phone: document.getElementById('phone').value,
-    address: document.getElementById('address').value,
-    city: document.getElementById('city').value,
-    postalCode: document.getElementById('postal-code').value,
-    paymentMethod: document.querySelector('input[name="payment"]:checked').value,
+    fullName:      document.getElementById("full-name").value,
+    phone:         document.getElementById("phone").value,
+    address:       document.getElementById("address").value,
+    city:          document.getElementById("city").value,
+    postalCode:    document.getElementById("postal-code").value,
+    paymentMethod: document.querySelector("input[name='payment']:checked").value,
     items: cart,
-    subtotal: cart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
-    deliveryFee: 10000,
-    tax: Math.round(cart.reduce((sum, item) => sum + (item.price * item.quantity), 0) * 0.1),
-    total: 0,
+    subtotal, deliveryFee: fee, tax,
+    total: subtotal + fee + tax,
     orderDate: new Date().toISOString(),
-    orderId: 'ORD' + Date.now()
+    orderId: "ORD" + Date.now()
   };
-  
-  orderData.total = orderData.subtotal + orderData.deliveryFee + orderData.tax;
-  
-  // Show loading
+
+  // Write order to Firebase
+  db.collection("orders").add(orderData).catch(e => console.warn("Order write failed:", e));
+
+  // Save to local history
+  const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
+  history.unshift(orderData);
+  localStorage.setItem("orderHistory", JSON.stringify(history));
+
   showLoading();
-  
-  // Simulate order processing
   setTimeout(() => {
     hideLoading();
     showSuccess(orderData);
     clearCart();
     closeCheckout();
-  }, 3000);
+  }, 2500);
 }
 
 function showLoading() {
-  const loadingOverlay = document.getElementById('loading-overlay');
-  loadingOverlay.classList.remove('hidden');
-  // Trigger transition
-  setTimeout(() => {
-    loadingOverlay.classList.add('show');
-  }, 10);
+  const el = document.getElementById("loading-overlay");
+  el.classList.remove("hidden");
+  setTimeout(() => el.classList.add("show"), 10);
 }
 
 function hideLoading() {
-  const loadingOverlay = document.getElementById('loading-overlay');
-  loadingOverlay.classList.remove('show');
-  // Wait for transition to complete before hiding
-  setTimeout(() => {
-    loadingOverlay.classList.add('hidden');
-  }, 300);
+  const el = document.getElementById("loading-overlay");
+  el.classList.remove("show");
+  setTimeout(() => el.classList.add("hidden"), 300);
 }
 
 function showSuccess(orderData) {
-  const successModal = document.getElementById('success-modal');
-  const orderDetails = document.getElementById('order-details');
-  
-  orderDetails.innerHTML = `
+  const modal  = document.getElementById("success-modal");
+  const detail = document.getElementById("order-details");
+  detail.innerHTML = `
     <div class="space-y-2">
       <p class="text-sm"><strong>Order ID:</strong> ${orderData.orderId}</p>
-      <p class="text-sm"><strong>Name:</strong> ${orderData.fullName}</p>
-      <p class="text-sm"><strong>Phone:</strong> ${orderData.phone}</p>
-      <p class="text-sm"><strong>Address:</strong> ${orderData.address}, ${orderData.city}</p>
+      <p class="text-sm"><strong>Name:</strong> ${escapeHtml(orderData.fullName)}</p>
+      <p class="text-sm"><strong>Phone:</strong> ${escapeHtml(orderData.phone)}</p>
+      <p class="text-sm"><strong>Address:</strong> ${escapeHtml(orderData.address)}, ${escapeHtml(orderData.city)}</p>
       <p class="text-sm"><strong>Payment:</strong> ${orderData.paymentMethod}</p>
-      <p class="text-sm"><strong>Total:</strong> <span class="gold-text">Rp ${orderData.total.toLocaleString()}</span></p>
-    </div>
-  `;
-  
-  successModal.classList.remove('hidden');
-  // Trigger transition
-  setTimeout(() => {
-    successModal.classList.add('show');
-  }, 10);
-  document.body.style.overflow = 'hidden';
+      <p class="text-sm"><strong>Total:</strong> <span class="gold-text">Rp ${orderData.total.toLocaleString("id-ID")}</span></p>
+    </div>`;
+  modal.classList.remove("hidden");
+  setTimeout(() => modal.classList.add("show"), 10);
+  document.body.style.overflow = "hidden";
 }
 
 function closeSuccess() {
-  const successModal = document.getElementById('success-modal');
-  successModal.classList.remove('show');
-  // Wait for transition to complete before hiding
-  setTimeout(() => {
-    successModal.classList.add('hidden');
-  }, 300);
-  document.body.style.overflow = 'auto';
-  
-  // Clear for
-  document.getElementById('address-form').reset();
+  const modal = document.getElementById("success-modal");
+  modal.classList.remove("show");
+  setTimeout(() => modal.classList.add("hidden"), 300);
+  document.body.style.overflow = "auto";
+  document.getElementById("address-form").reset();
 }
 
-function removeLastMessage() {
-  const chat = document.getElementById("chat-window");
-  if (chat.lastElementChild) {
-    chat.removeChild(chat.lastElementChild);
+// ============================================================
+// ORDER HISTORY MODAL
+// ============================================================
+function showOrderHistory() {
+  const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
+  const body    = document.getElementById("history-modal-body");
+  const modal   = document.getElementById("history-modal");
+
+  if (!body || !modal) return;
+
+  if (history.length === 0) {
+    body.innerHTML = `<p class="text-gray-400 text-center py-8">No orders yet.</p>`;
+  } else {
+    body.innerHTML = history.map(o => `
+      <div class="glass-morphism rounded-xl p-4 space-y-1">
+        <p class="text-xs text-gray-400">${new Date(o.orderDate).toLocaleString("id-ID")}</p>
+        <p class="gold-text font-bold text-sm">${o.orderId}</p>
+        <p class="text-gray-300 text-sm">${o.items.map(i => `${i.quantity}× ${escapeHtml(i.name)}`).join(", ")}</p>
+        <p class="text-white font-semibold">Rp ${o.total.toLocaleString("id-ID")}</p>
+        <span class="inline-block text-xs px-2 py-0.5 rounded-full" style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.3)">Completed</span>
+      </div>`).join("");
+  }
+
+  modal.classList.remove("hidden");
+  setTimeout(() => modal.classList.add("flex"), 10);
+}
+
+function closeHistoryModal() {
+  const modal = document.getElementById("history-modal");
+  modal.classList.remove("flex");
+  setTimeout(() => modal.classList.add("hidden"), 300);
+}
+
+// ============================================================
+// MAP (checkout)
+// ============================================================
+let checkoutMap = null;
+let checkoutMarker = null;
+
+function initCheckoutMap() {
+  const container = document.getElementById("checkout-map-container");
+  const btn       = document.getElementById("pin-location-btn");
+  container.style.display = "block";
+  if (btn) btn.style.display = "none";
+
+  if (checkoutMap) { checkoutMap.invalidateSize(); return; }
+
+  checkoutMap = L.map("checkout-map").setView([-6.2088, 106.8456], 13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap contributors"
+  }).addTo(checkoutMap);
+
+  checkoutMarker = L.marker([-6.2088, 106.8456], { draggable: true }).addTo(checkoutMap);
+  checkoutMarker.on("dragend", e => {
+    const { lat, lng } = e.target.getLatLng();
+    document.getElementById("map-coords").textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  });
+
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      const { latitude: lat, longitude: lng } = pos.coords;
+      checkoutMap.setView([lat, lng], 15);
+      checkoutMarker.setLatLng([lat, lng]);
+      document.getElementById("map-coords").textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    });
   }
 }
+
+// ============================================================
+// DOM READY — wire up all event listeners & start listener
+// ============================================================
+document.addEventListener("DOMContentLoaded", () => {
+  const sendBtn       = document.getElementById("send-btn");
+  const input         = document.getElementById("user-input");
+  const cartBtn       = document.getElementById("cart-btn");
+  const closeCartBtn  = document.getElementById("close-cart");
+  const clearCartBtn  = document.getElementById("clear-cart-btn");
+  const checkoutBtn   = document.getElementById("checkout-btn");
+  const cartOverlay   = document.getElementById("cart-overlay");
+  const closeCheckout = document.getElementById("close-checkout");
+  const placeOrder    = document.getElementById("place-order-btn");
+  const closeSuccess  = document.getElementById("close-success");
+
+  sendBtn?.addEventListener("click", sendMessage);
+  input?.addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
+  cartBtn?.addEventListener("click", toggleCart);
+  closeCartBtn?.addEventListener("click", toggleCart);
+  cartOverlay?.addEventListener("click", toggleCart);
+  clearCartBtn?.addEventListener("click", clearCart);
+  checkoutBtn?.addEventListener("click", openCheckout);
+  closeCheckout?.addEventListener("click", closeCheckout);
+  placeOrder?.addEventListener("click", processOrder);
+  closeSuccess?.addEventListener("click", closeSuccess);
+
+  // Init cart display
+  updateCartCount();
+
+  // Start real-time Firebase chat listener
+  startChatListener();
+});
