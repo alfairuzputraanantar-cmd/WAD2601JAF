@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tempat. | Buyer is King</title>
+    <title>Tempat. | Chat with Our Seller</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
@@ -42,7 +42,7 @@
                 </button>
                 <div id="db-status" class="text-xs uppercase text-green-400 font-semibold flex items-center gap-2">
                     <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                    Kingdom Ready
+                    Live Chat
                 </div>
             </div>
         </header>
@@ -66,15 +66,14 @@
                         </svg>
                     </div>
                     <div>
-                        <p class="text-lg font-semibold mb-2">Welcome, Your Majesty.</p>
-                        <p class="text-gray-300">I am your personal food curator. My database is ready to serve your culinary desires.</p>
-                        <div class="mt-4 p-4 glass-morphism rounded-lg">
-                            <p class="text-sm gold-text font-semibold mb-2">Try commands like:</p>
+                        <p class="text-lg font-semibold mb-1">👋 Welcome to <span class="gold-text">Tempat.</span></p>
+                        <p class="text-gray-300 text-sm">You're now connected to our seller. Type a message below — ask anything about the menu, special requests, or wait for our seller to send you personalised recommendations!</p>
+                        <div class="mt-4 p-3 glass-morphism rounded-lg" style="border:1px solid rgba(212,175,55,0.2);">
+                            <p class="text-xs gold-text font-semibold mb-2">💡 Tips</p>
                             <div class="flex flex-wrap gap-2">
-                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Something sweet"</span>
-                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Cheap and filling"</span>
-                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Luxury experience"</span>
-                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs gold-border border">"Simple and quick"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs" style="border:1px solid rgba(212,175,55,0.3);color:#9ca3af;">"Do you have vegetarian options?"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs" style="border:1px solid rgba(212,175,55,0.3);color:#9ca3af;">"What's today's special?"</span>
+                                <span class="px-3 py-1 bg-black/50 rounded-full text-xs" style="border:1px solid rgba(212,175,55,0.3);color:#9ca3af;">"Can I customise my order?"</span>
                             </div>
                         </div>
                     </div>
@@ -85,14 +84,14 @@
         <!-- Input Footer -->
         <footer class="glass-morphism p-6 border-t gold-border">
             <div class="flex gap-3">
-                <input type="text" id="user-input" placeholder="Command your culinary experience..."
+                <input type="text" id="user-input" placeholder="Type a message to the seller..."
                     class="flex-1 luxury-input p-4 rounded-xl text-white placeholder-gray-500">
                 <button id="send-btn" class="luxury-button text-black font-bold px-8 py-4 rounded-xl tracking-wide">
                     <span class="flex items-center gap-2">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
                         </svg>
-                        DISCOVER
+                        SEND
                     </span>
                 </button>
             </div>
@@ -304,28 +303,9 @@
         </div>
     </div>
 
-    <!-- Floating Chat Button -->
-    <button onclick="openBuyerChat()" id="buyer-chat-fab" style="position:fixed;bottom:100px;right:24px;z-index:9000;width:52px;height:52px;border-radius:50%;background:#D4AF37;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 20px rgba(212,175,55,0.5);">
-    <svg width="22" height="22" fill="none" stroke="#000" stroke-width="2" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-    </svg>
-    </button>
 
-    <!-- Buyer Chat Modal -->
-    <div id="buyer-chat-modal" style="display:none;position:fixed;bottom:170px;right:24px;z-index:9001;width:320px;background:#0a0a0a;border:1px solid rgba(212,175,55,0.3);border-radius:16px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.8);">
-    <div style="padding:14px 16px;background:rgba(0,0,0,0.5);border-bottom:1px solid rgba(212,175,55,0.2);display:flex;justify-content:space-between;align-items:center;">
-        <span style="color:#D4AF37;font-weight:700;font-size:14px;">💬 Chat with Seller</span>
-        
-        <button onclick="closeBuyerChat()" style="background:none;border:none;color:#6b7280;cursor:pointer;font-size:18px;">✕</button>
-    </div>
-    <div id="buyer-chat-messages" style="height:280px;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;"></div>
-    <div style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid rgba(212,175,55,0.2);">
-        <input id="buyer-msg-input" placeholder="Type a message..." onkeypress="if(event.key==='Enter')submitBuyerMsg()" style="flex:1;background:#111;border:1px solid rgba(212,175,55,0.2);border-radius:8px;color:white;padding:9px 12px;font-size:13px;outline:none;">
-        <button onclick="submitBuyerMsg()" style="width:38px;height:38px;border-radius:8px;background:#D4AF37;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;">
-        <svg width="16" height="16" fill="none" stroke="#000" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
-        </button>
-    </div>
-    </div>
+
+
 
     <script src="script.js"></script>
 </body>
