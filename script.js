@@ -27,7 +27,9 @@ const SESSION_ID = localStorage.getItem("buyerSessionId") || (() => {
 // ============================================================
 // MESSAGE COLLECTION REF — must match what Seller uses
 // ============================================================
-const messagesRef = db.collection("chats/session_01/messages");
+const CHAT_COLLECTION_PATH = "chats/session_01/messages";
+const messagesRef = db.collection(CHAT_COLLECTION_PATH);
+console.log("[Buyer] Connected to Chat Collection:", CHAT_COLLECTION_PATH);
 
 // ============================================================
 // RENDERED MESSAGE TRACKING — prevent duplicate renders
@@ -52,6 +54,8 @@ async function sendMessage() {
 
   input.value = "";
   input.disabled = true;
+  // Clear typing indicator immediately on send
+  localStorage.setItem("buyer_typing", "0");
 
   try {
     await messagesRef.add({
@@ -79,14 +83,36 @@ function renderTextBubble(msg, isBuyer) {
   const row = document.createElement("div");
   row.className = `chat-msg-row ${isBuyer ? "chat-msg-row--buyer" : "chat-msg-row--seller"}`;
 
+  // Tag the row with the Firestore doc ID for removal on 'deleted' events
+  if (msg.id) row.id = "msg_" + msg.id;
+
   const ts = formatTime(msg.timestamp);
 
   if (isBuyer) {
+    // Buyer bubble — gold, right-aligned, with hover-reveal ✕ delete button
     row.innerHTML = `
-      <div class="chat-bubble chat-bubble--buyer">
-        <span>${escapeHtml(msg.text)}</span>
-        <span class="chat-ts">${ts}</span>
+      <div style="display:flex;align-items:flex-end;gap:6px;">
+        <button class="msg-delete-btn"
+                onclick="deleteMessage('${msg.id}')"
+                title="Delete this message"
+                style="opacity:0;width:22px;height:22px;flex-shrink:0;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:50%;color:#ef4444;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:opacity 0.2s,background 0.2s;margin-bottom:4px;">
+          ✕
+        </button>
+        <div class="chat-bubble chat-bubble--buyer">
+          <span>${escapeHtml(msg.text)}</span>
+          <span class="chat-ts">${ts}</span>
+        </div>
       </div>`;
+
+    // Show delete button on hover of the row
+    row.addEventListener("mouseenter", () => {
+      const btn = row.querySelector(".msg-delete-btn");
+      if (btn) btn.style.opacity = "1";
+    });
+    row.addEventListener("mouseleave", () => {
+      const btn = row.querySelector(".msg-delete-btn");
+      if (btn) btn.style.opacity = "0";
+    });
   } else {
     row.innerHTML = `
       <div class="chat-bubble chat-bubble--seller">
@@ -98,6 +124,40 @@ function renderTextBubble(msg, isBuyer) {
 
   chatWindow.appendChild(row);
   chatWindow.scrollTop = chatWindow.scrollHeight;
+  updateMsgCount(1);
+}
+
+// ============================================================
+// RENDER: system notification banner (sender === "system")
+// Used for "🛒 NEW ORDER PLACED!" announcements
+// ============================================================
+function renderSystemNotification(msg) {
+  const chatWindow = document.getElementById("chat-window");
+  const row = document.createElement("div");
+  row.className = "chat-msg-row";
+  if (msg.id) row.id = "msg_" + msg.id;
+
+  const ts = formatTime(msg.timestamp);
+  row.innerHTML = `
+    <div style="
+      width:100%;
+      background: linear-gradient(135deg,rgba(212,175,55,0.18),rgba(212,175,55,0.06));
+      border:1px solid rgba(212,175,55,0.45);
+      border-radius:10px;
+      padding:10px 14px;
+      display:flex;
+      flex-direction:column;
+      gap:3px;
+      margin: 4px 0;
+    ">
+      <span style="font-size:11px;font-weight:700;letter-spacing:0.08em;color:#D4AF37;text-transform:uppercase;">⚡ System Notification</span>
+      <span style="color:#f0e0a0;font-size:13px;font-weight:500;">${escapeHtml(msg.text)}</span>
+      <span style="font-size:10px;color:rgba(255,255,255,0.3);align-self:flex-end;">${ts}</span>
+    </div>`;
+
+  chatWindow.appendChild(row);
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+  updateMsgCount(1);
 }
 
 // ============================================================
@@ -107,12 +167,14 @@ function renderTextBubble(msg, isBuyer) {
 function renderProductCard(msg) {
   const chatWindow = document.getElementById("chat-window");
 
+
   // Seller pushes product fields FLAT on the doc root (not nested in msg.product)
   // Fields: name, price, info (description), stock, productId, tags
   const name  = msg.name  || "Item";
   const price = typeof msg.price === "number" ? msg.price : 0;
   const info  = msg.info  || "";          // seller uses 'info' for description
   const stock = typeof msg.stock === "number" ? msg.stock : 99;
+  const productId = msg.productId || "";  // NEEDED for order decrement logic
   const outOfStock = stock <= 0;
   const ts = formatTime(msg.timestamp);
 
@@ -121,7 +183,8 @@ function renderProductCard(msg) {
 
   const row = document.createElement("div");
   row.className = "chat-msg-row chat-msg-row--seller";
-  row.id = cardId + "_row";
+  // Use msg_ prefix so the 'removed' onSnapshot handler can find and remove it
+  row.id = msg.id ? "msg_" + msg.id : cardId + "_row";
 
   // Stock badge helper
   function stockBadgeHtml(s) {
@@ -170,7 +233,7 @@ function renderProductCard(msg) {
             </div>
             <button class="food-rec-add"
                     id="${cardId}_addBtn"
-                    onclick="addRecToCart('${cardId}','${safeName}',${price},${stock})"
+                    onclick="addRecToCart('${cardId}','${safeName}',${price},${stock},'${productId}')"
                     ${outOfStock ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ""}>
               ${outOfStock
                 ? "Out of Stock"
@@ -186,6 +249,7 @@ function renderProductCard(msg) {
 
   chatWindow.appendChild(row);
   chatWindow.scrollTop = chatWindow.scrollHeight;
+  updateMsgCount(1);
 
   // Flash the live status dot
   const dot = document.querySelector("#db-status .w-2");
@@ -220,7 +284,7 @@ function changeQty(cardId, delta, maxStock) {
 // ============================================================
 // ADD RECOMMENDED PRODUCT TO CART
 // ============================================================
-function addRecToCart(cardId, name, price, maxStock) {
+function addRecToCart(cardId, name, price, maxStock, explicitProductId) {
   const qtyEl = document.getElementById(cardId + "_qty");
   const qty   = qtyEl ? parseInt(qtyEl.textContent, 10) : 1;
 
@@ -228,13 +292,20 @@ function addRecToCart(cardId, name, price, maxStock) {
 
   // Add each unit as qty in cart (reuse existing addToCart logic)
   const productObj = {
-    id: cardId,          // unique per card
+    id: explicitProductId || cardId, // Use real db ID if available, else fallback
     name,
     price,
     stock: maxStock
   };
 
   addToCartWithQty(productObj, qty);
+
+  // ── Notify seller via localStorage cart event ──────────────
+  try {
+    const events = JSON.parse(localStorage.getItem("buyer_cart_events") || "[]");
+    events.push({ productId: productObj.id, productName: name, price, qty, ts: Date.now() });
+    localStorage.setItem("buyer_cart_events", JSON.stringify(events));
+  } catch (e) { /* ignore */ }
 }
 
 // addToCartWithQty — extended version of addToCart that accepts quantity
@@ -268,20 +339,35 @@ function startChatListener() {
     .orderBy("timestamp", "asc")
     .onSnapshot(snapshot => {
       snapshot.docChanges().forEach(change => {
-        if (change.type !== "added") return;
-
         const docId = change.doc.id;
+
+        // ── REMOVED: doc was deleted from Firestore ──────────────────
+        if (change.type === "removed") {
+          renderedIds.delete(docId);
+          const el = document.getElementById("msg_" + docId);
+          if (el) {
+            el.style.transition = "opacity 0.25s, transform 0.25s";
+            el.style.opacity = "0";
+            el.style.transform = "scale(0.95)";
+            setTimeout(() => el.remove(), 260);
+          }
+          updateMsgCount(-1);
+          return;
+        }
+
+        // ── ADDED: new message incoming ──────────────────────────────
+        if (change.type !== "added") return;
         if (renderedIds.has(docId)) return;
         renderedIds.add(docId);
 
-        const msg   = { id: docId, ...change.doc.data() };
+        const msg     = { id: docId, ...change.doc.data() };
         const isBuyer = msg.sender === "buyer";
 
-        if (msg.type === "product" && !isBuyer) {
-          // Seller pushed a product recommendation → render card
+        if (msg.sender === "system") {
+          renderSystemNotification(msg);
+        } else if (msg.type === "product" && !isBuyer) {
           renderProductCard(msg);
         } else {
-          // Plain text from either side
           renderTextBubble(msg, isBuyer);
         }
       });
@@ -300,6 +386,104 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// ============================================================
+// MESSAGE COUNT BADGE
+// ============================================================
+let _msgCount = 0;
+function updateMsgCount(delta) {
+  _msgCount = Math.max(0, _msgCount + delta);
+  const el = document.getElementById("chat-msg-count");
+  if (el) el.textContent = _msgCount === 0
+    ? "0 messages in session"
+    : `${_msgCount} message${_msgCount === 1 ? "" : "s"} in session`;
+}
+
+// ============================================================
+// DELETE SINGLE MESSAGE (Buyer only)
+// Removes the Firestore doc — onSnapshot 'removed' cleans the UI
+// automatically for both Buyer and Seller in real-time.
+// ============================================================
+async function deleteMessage(msgId) {
+  if (!msgId) return;
+  try {
+    await messagesRef.doc(msgId).delete();
+  } catch (err) {
+    console.error("deleteMessage failed:", err);
+    showChatToast("Could not delete message.", "#ef4444");
+  }
+}
+
+// ============================================================
+// CLEAR ALL MESSAGES — batch-delete every doc in the collection
+// Firestore doesn't support collection-level delete natively;
+// we query all docs and delete in batches of 490.
+// The onSnapshot 'removed' events propagate to the Seller
+// in real-time, emptying their chat panel too.
+// ============================================================
+async function clearAllMessages() {
+  if (!confirm("🗑️ Clear entire conversation?\n\nThis will remove ALL messages — including product cards — for both you and the Seller. This cannot be undone.")) return;
+
+  const btn = document.getElementById("clear-chat-btn");
+  if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; }
+
+  try {
+    // Fetch all docs (no limit — session should stay manageable)
+    const snapshot = await messagesRef.get();
+    if (snapshot.empty) {
+      showChatToast("Chat is already empty.", "#6b7280");
+      return;
+    }
+
+    // Firestore batch: max 500 writes per batch
+    const BATCH_SIZE = 490;
+    const docs = snapshot.docs;
+    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+      const batch = db.batch();
+      docs.slice(i, i + BATCH_SIZE).forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+    }
+
+    // Reset local counter; DOM is cleaned by onSnapshot 'removed'
+    _msgCount = 0;
+    updateMsgCount(0);
+    showChatToast("💬 Conversation cleared.", "#4ade80");
+  } catch (err) {
+    console.error("clearAllMessages failed:", err);
+    showChatToast("Could not clear chat. Check console.", "#ef4444");
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = "1"; }
+  }
+}
+
+// ============================================================
+// INLINE TOAST (lightweight, no cart notification reuse)
+// ============================================================
+function showChatToast(text, color = "#D4AF37") {
+  const existing = document.getElementById("chat-toast");
+  if (existing) existing.remove();
+
+  const t = document.createElement("div");
+  t.id = "chat-toast";
+  t.style.cssText = `
+    position:fixed;bottom:100px;left:50%;transform:translateX(-50%) translateY(20px);
+    background:#111;border:1px solid ${color}55;border-radius:10px;
+    padding:10px 22px;color:${color};font-weight:600;font-size:13px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.6);z-index:9990;
+    opacity:0;transition:all 0.3s ease;pointer-events:none;`;
+  t.textContent = text;
+  document.body.appendChild(t);
+
+  requestAnimationFrame(() => {
+    t.style.opacity = "1";
+    t.style.transform = "translateX(-50%) translateY(0)";
+  });
+  setTimeout(() => {
+    t.style.opacity = "0";
+    t.style.transform = "translateX(-50%) translateY(10px)";
+    setTimeout(() => t.remove(), 300);
+  }, 3000);
 }
 
 // ============================================================
@@ -521,81 +705,293 @@ function validateForm() {
   return true;
 }
 
-function processOrder() {
+// Holds the active onSnapshot unsubscribe fn for the live order status listener
+let _orderStatusUnsub = null;
+
+async function processOrder() {
   if (!validateForm()) return;
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
   if (cart.length === 0) { alert("Your cart is empty!"); return; }
-  saveCurrentAddress();
-
-  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
-  const fee = 10000;
-  const tax = Math.round(subtotal * 0.1);
-  const orderData = {
-    fullName:      document.getElementById("full-name").value,
-    phone:         document.getElementById("phone").value,
-    address:       document.getElementById("address").value,
-    city:          document.getElementById("city").value,
-    postalCode:    document.getElementById("postal-code").value,
-    paymentMethod: document.querySelector("input[name='payment']:checked").value,
-    items: cart,
-    subtotal, deliveryFee: fee, tax,
-    total: subtotal + fee + tax,
-    orderDate: new Date().toISOString(),
-    orderId: "ORD" + Date.now()
-  };
-
-  // Write order to Firebase
-  db.collection("orders").add(orderData).catch(e => console.warn("Order write failed:", e));
-
-  // Save to local history
-  const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
-  history.unshift(orderData);
-  localStorage.setItem("orderHistory", JSON.stringify(history));
 
   showLoading();
-  setTimeout(() => {
+  saveCurrentAddress();
+
+  try {
+    // ── STEP 1: Stock Validation (pre-flight read) ──────────────────────
+    // Read live Firestore stock for every linked item BEFORE writing anything.
+    // If ANY item is over-stock, abort immediately.
+    for (const item of cart) {
+      const pid = item.productId || item.id;   // cart stores key as 'productId'
+      if (!pid || pid.startsWith("card_")) {
+        console.warn("[Stock check] skipping unlinked item:", item.name);
+        continue;
+      }
+      const docSnap = await db.collection("products").doc(pid).get();
+      if (docSnap.exists) {
+        const currentStock = typeof docSnap.data().stock === "number"
+          ? docSnap.data().stock : 0;
+        console.log(`[Stock check] ${item.name}: requested=${item.quantity}, available=${currentStock}`);
+        if (item.quantity > currentStock) {
+          hideLoading();
+          alert(`⚠️ Not enough stock!\n"${item.name}" only has ${currentStock} left. Please update your cart.`);
+          return;   // ← abort entire checkout
+        }
+      } else {
+        console.warn(`[Stock check] Product doc not found for pid: ${pid}`);
+      }
+    }
+
+    // ── STEP 2: Build Order Data ────────────────────────────────────────
+    const subtotal   = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+    const fee        = 10000;
+    const tax        = Math.round(subtotal * 0.1);
+    const grandTotal = subtotal + fee + tax;
+    const fullName   = document.getElementById("full-name").value.trim();
+    const orderId    = "ORD-" + Math.floor(1000 + Math.random() * 9000);
+
+    const orderData = {
+      // ── Seller-visible fields ──
+      buyerID:     SESSION_ID,
+      buyerName:   fullName,
+      items:       cart,
+      total:       grandTotal,
+      totalAmount: grandTotal,
+      status:      "new",
+      timestamp:   firebase.firestore.FieldValue.serverTimestamp(),
+
+      // ── Receipt / UI fields ──
+      fullName,
+      phone:         document.getElementById("phone").value,
+      address:       document.getElementById("address").value,
+      city:          document.getElementById("city").value,
+      postalCode:    document.getElementById("postal-code").value,
+      paymentMethod: document.querySelector("input[name='payment']:checked").value,
+      subtotal, deliveryFee: fee, tax,
+      orderDate: new Date().toISOString(),
+      orderId
+    };
+
+    // ── STEP 3: Write Order → capture the new DocumentReference ────────
+    const orderRef = await db.collection("orders").add(orderData);
+    console.log("[Order] Written to Firestore:", orderRef.id);
+
+    // ── STEP 3b: System notification → Seller Chat ─────────────────────
+    const totalUSD = (grandTotal / 15000).toFixed(2);
+    await messagesRef.add({
+      sender:    "system",
+      text:      "🛒 NEW ORDER PLACED! Total: $" + totalUSD +
+                 " (Rp " + grandTotal.toLocaleString("id-ID") + ")" +
+                 " | Order: " + orderId +
+                 " | Buyer: " + fullName,
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // ── STEP 4: Decrement Stock (atomic server-side) ────────────────────
+    for (const item of cart) {
+      const pid = item.productId || item.id;
+
+      if (pid && !pid.startsWith("card_")) {
+        const prodRef = db.collection("products").doc(pid);
+
+        // Atomic decrement — safe under concurrent writes
+        await prodRef.update({
+          stock: firebase.firestore.FieldValue.increment(-item.quantity)
+        });
+        console.log(`[Stock] Decremented ${item.name} (${pid}) by ${item.quantity}`);
+
+        // Read confirmed new stock for the chat notification
+        const updatedSnap = await prodRef.get();
+        const newStock = updatedSnap.exists ? (updatedSnap.data().stock ?? 0) : 0;
+
+        messagesRef.add({
+          sender:    "buyer",
+          text:      `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name}. New stock: ${newStock}.`,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        }).catch(e => console.warn("Chat notification failed:", e));
+
+      } else {
+        // Custom / unlinked item — no stock to decrement
+        console.warn(`[Stock] Skipping decrement for unlinked item: ${item.name}`);
+        messagesRef.add({
+          sender:    "buyer",
+          text:      `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name} (custom item — no stock linked).`,
+          timestamp: firebase.firestore.FieldValue.serverTimestamp()
+        }).catch(e => console.warn("Chat notification failed:", e));
+      }
+    }
+
+    // ── STEP 5: Finalise UI ─────────────────────────────────────────────
+    const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
+    history.unshift({ ...orderData, firestoreId: orderRef.id });
+    localStorage.setItem("orderHistory", JSON.stringify(history));
+
     hideLoading();
-    showSuccess(orderData);
-    clearCart();
     closeCheckout();
-  }, 2500);
+    clearCart();
+    // Pass the live Firestore ref so the receipt can subscribe to status changes
+    showSuccess(orderData, orderRef);
+
+  } catch (error) {
+    console.error("processOrder failed:", error);
+    hideLoading();
+    alert("Checkout failed. Please check your connection and try again.\n\nDetails: " + error.message);
+  }
 }
 
 function showLoading() {
   const el = document.getElementById("loading-overlay");
+  if (!el) return;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("show"), 10);
 }
 
 function hideLoading() {
   const el = document.getElementById("loading-overlay");
+  if (!el) return;
   el.classList.remove("show");
   setTimeout(() => el.classList.add("hidden"), 300);
 }
 
-function showSuccess(orderData) {
-  const modal  = document.getElementById("success-modal");
-  const detail = document.getElementById("order-details");
-  detail.innerHTML = `
-    <div class="space-y-2">
-      <p class="text-sm"><strong>Order ID:</strong> ${orderData.orderId}</p>
-      <p class="text-sm"><strong>Name:</strong> ${escapeHtml(orderData.fullName)}</p>
-      <p class="text-sm"><strong>Phone:</strong> ${escapeHtml(orderData.phone)}</p>
-      <p class="text-sm"><strong>Address:</strong> ${escapeHtml(orderData.address)}, ${escapeHtml(orderData.city)}</p>
-      <p class="text-sm"><strong>Payment:</strong> ${orderData.paymentMethod}</p>
-      <p class="text-sm"><strong>Total:</strong> <span class="gold-text">Rp ${orderData.total.toLocaleString("id-ID")}</span></p>
-    </div>`;
+// ── STATUS BADGE HELPERS ────────────────────────────────────────────────────
+const STATUS_STYLES = {
+  new:        { bg: "#fef3c7", color: "#92400e", label: "🟡 New — Awaiting Seller" },
+  preparing:  { bg: "#dbeafe", color: "#1e40af", label: "🔵 Preparing Your Order" },
+  ready:      { bg: "#d1fae5", color: "#065f46", label: "🟢 Ready for Pickup" },
+  delivering: { bg: "#ede9fe", color: "#5b21b6", label: "🟣 Out for Delivery" },
+  delivered:  { bg: "#d1fae5", color: "#065f46", label: "✅ Delivered!" },
+  completed:  { bg: "#d1fae5", color: "#065f46", label: "✅ Completed" },
+  cancelled:  { bg: "#fee2e2", color: "#991b1b", label: "❌ Cancelled" },
+};
+
+function statusBadgeHtml(status) {
+  const s = STATUS_STYLES[String(status).toLowerCase()] ||
+            { bg: "#f3f4f6", color: "#374151", label: "⏳ " + status };
+  return `<span id="receipt-status-badge" style="
+    display:inline-block;
+    padding:4px 12px;
+    border-radius:9999px;
+    font-size:12px;
+    font-weight:700;
+    background:${s.bg};
+    color:${s.color};
+    letter-spacing:0.03em;
+  ">${s.label}</span>`;
+}
+
+function showSuccess(orderData, orderRef) {
+  const modal = document.getElementById("success-modal");
+  if (!modal) return;
+
   modal.classList.remove("hidden");
+  modal.classList.add("flex");
   setTimeout(() => modal.classList.add("show"), 10);
   document.body.style.overflow = "hidden";
+
+  // 1. Header details — includes live status badge
+  const detailsEl = document.getElementById("receipt-details");
+  if (detailsEl) {
+    detailsEl.innerHTML = `
+      <div class="flex justify-between">
+        <span class="text-gray-500">Order ID:</span>
+        <span class="font-semibold">${escapeHtml(orderData.orderId)}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Date:</span>
+        <span class="font-semibold">${new Date().toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Customer:</span>
+        <span class="font-semibold">${escapeHtml(orderData.fullName)}</span>
+      </div>
+      <div class="flex justify-between">
+        <span class="text-gray-500">Payment:</span>
+        <span class="font-semibold capitalize">${escapeHtml(orderData.paymentMethod)}</span>
+      </div>
+      <div class="flex justify-between items-center" style="margin-top:8px;">
+        <span class="text-gray-500">Status:</span>
+        <div id="receipt-status-container">${statusBadgeHtml(orderData.status || "new")}</div>
+      </div>`;
+  }
+
+  // 2. Items list
+  const itemsEl = document.getElementById("receipt-items-list");
+  if (itemsEl) {
+    itemsEl.innerHTML = orderData.items.map(item => `
+      <div class="flex justify-between text-sm py-1">
+        <div class="flex-1 pr-2">
+          <p class="font-semibold">${escapeHtml(item.name)}</p>
+          <p class="text-xs text-gray-500">${item.quantity} × Rp ${item.price.toLocaleString("id-ID")}</p>
+        </div>
+        <div class="font-semibold">Rp ${(item.price * item.quantity).toLocaleString("id-ID")}</div>
+      </div>`).join("");
+  }
+
+  // 3. Totals breakdown
+  const totalsEl = document.getElementById("receipt-totals");
+  if (totalsEl) {
+    totalsEl.innerHTML = `
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Subtotal</span>
+        <span>Rp ${orderData.subtotal.toLocaleString("id-ID")}</span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Tax (10%)</span>
+        <span>Rp ${orderData.tax.toLocaleString("id-ID")}</span>
+      </div>
+      <div class="flex justify-between text-sm">
+        <span class="text-gray-600">Delivery Fee</span>
+        <span>Rp ${orderData.deliveryFee.toLocaleString("id-ID")}</span>
+      </div>
+      <div class="flex justify-between text-lg font-bold mt-2 pt-2 border-t border-dashed border-gray-400">
+        <span>TOTAL</span>
+        <span>Rp ${orderData.total.toLocaleString("id-ID")}</span>
+      </div>`;
+  }
+
+  // 4. Live Order Status listener ─────────────────────────────────────────
+  // Tear down any previous listener first
+  if (_orderStatusUnsub) { _orderStatusUnsub(); _orderStatusUnsub = null; }
+
+  if (orderRef) {
+    console.log("[Status] Starting live listener on order:", orderRef.id);
+    _orderStatusUnsub = orderRef.onSnapshot(doc => {
+      if (!doc.exists) return;
+      const newStatus = doc.data().status || "new";
+      console.log("[Status] Update received:", newStatus);
+
+      const container = document.getElementById("receipt-status-container");
+      if (container) {
+        container.innerHTML = statusBadgeHtml(newStatus);
+
+        // Visual pulse to signal a live update
+        container.style.transition = "opacity 0.2s";
+        container.style.opacity = "0";
+        setTimeout(() => { container.style.opacity = "1"; }, 200);
+      }
+    }, err => {
+      console.error("[Status] onSnapshot error:", err);
+    });
+  }
 }
 
 function closeSuccess() {
+  // Unsubscribe the live status listener so we don't leak it
+  if (_orderStatusUnsub) {
+    _orderStatusUnsub();
+    _orderStatusUnsub = null;
+    console.log("[Status] Listener unsubscribed.");
+  }
+
   const modal = document.getElementById("success-modal");
+  if (!modal) return;
   modal.classList.remove("show");
-  setTimeout(() => modal.classList.add("hidden"), 300);
+  setTimeout(() => {
+    modal.classList.remove("flex");
+    modal.classList.add("hidden");
+  }, 300);
   document.body.style.overflow = "auto";
-  document.getElementById("address-form").reset();
+  const form = document.getElementById("address-form");
+  if (form) form.reset();
 }
 
 // ============================================================
@@ -675,11 +1071,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const cartBtn       = document.getElementById("cart-btn");
   const closeCartBtn  = document.getElementById("close-cart");
   const clearCartBtn  = document.getElementById("clear-cart-btn");
-  const checkoutBtn   = document.getElementById("checkout-btn");
-  const cartOverlay   = document.getElementById("cart-overlay");
-  const closeCheckout = document.getElementById("close-checkout");
-  const placeOrder    = document.getElementById("place-order-btn");
-  const closeSuccess  = document.getElementById("close-success");
+  const checkoutBtn      = document.getElementById("checkout-btn");
+  const cartOverlay      = document.getElementById("cart-overlay");
+  const closeCheckoutBtn = document.getElementById("close-checkout");
+  const placeOrderBtn    = document.getElementById("place-order-btn");
+  const closeSuccessBtn  = document.getElementById("close-success");
 
   sendBtn?.addEventListener("click", sendMessage);
   input?.addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
@@ -688,13 +1084,28 @@ document.addEventListener("DOMContentLoaded", () => {
   cartOverlay?.addEventListener("click", toggleCart);
   clearCartBtn?.addEventListener("click", clearCart);
   checkoutBtn?.addEventListener("click", openCheckout);
-  closeCheckout?.addEventListener("click", closeCheckout);
-  placeOrder?.addEventListener("click", processOrder);
-  closeSuccess?.addEventListener("click", closeSuccess);
+  closeCheckoutBtn?.addEventListener("click", closeCheckout);
+  placeOrderBtn?.addEventListener("click", processOrder);
+  closeSuccessBtn?.addEventListener("click", closeSuccess);
+
+  // ── Buyer typing indicator — signals the Seller panel ──────
+  if (input) {
+    let _typingTimeout = null;
+    input.addEventListener("input", () => {
+      localStorage.setItem("buyer_typing", "1");
+      clearTimeout(_typingTimeout);
+      _typingTimeout = setTimeout(() => localStorage.setItem("buyer_typing", "0"), 3000);
+    });
+    input.addEventListener("blur", () => {
+      clearTimeout(_typingTimeout);
+      localStorage.setItem("buyer_typing", "0");
+    });
+  }
 
   // Init cart display
   updateCartCount();
 
   // Start real-time Firebase chat listener
   startChatListener();
+  console.log("[Buyer] startChatListener() called — onSnapshot active on:", CHAT_COLLECTION_PATH);
 });
