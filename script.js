@@ -91,7 +91,7 @@ function renderTextBubble(msg, isBuyer) {
   if (isBuyer) {
     // Buyer bubble — gold, right-aligned, with hover-reveal ✕ delete button
     row.innerHTML = `
-      <div style="display:flex;align-items:flex-end;gap:6px;">
+      <div style="display:flex;align-items:flex-end;justify-content:flex-end;gap:6px;">
         <button class="msg-delete-btn"
                 onclick="deleteMessage('${msg.id}')"
                 title="Delete this message"
@@ -170,9 +170,9 @@ function renderProductCard(msg) {
 
   // Seller pushes product fields FLAT on the doc root (not nested in msg.product)
   // Fields: name, price, info (description), stock, productId, tags
-  const name  = msg.name  || "Item";
+  const name = msg.name || "Item";
   const price = typeof msg.price === "number" ? msg.price : 0;
-  const info  = msg.info  || "";          // seller uses 'info' for description
+  const info = msg.info || "";          // seller uses 'info' for description
   const stock = typeof msg.stock === "number" ? msg.stock : 99;
   const productId = msg.productId || "";  // NEEDED for order decrement logic
   const outOfStock = stock <= 0;
@@ -193,8 +193,8 @@ function renderProductCard(msg) {
     return `<span class="stock-badge stock-badge--ok">✅ ${s} in stock</span>`;
   }
 
-  const safeName  = escapeHtml(name);
-  const safeInfo  = escapeHtml(info);
+  const safeName = escapeHtml(name);
+  const safeInfo = escapeHtml(info);
 
   row.innerHTML = `
     <div>
@@ -236,8 +236,8 @@ function renderProductCard(msg) {
                     onclick="addRecToCart('${cardId}','${safeName}',${price},${stock},'${productId}')"
                     ${outOfStock ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ""}>
               ${outOfStock
-                ? "Out of Stock"
-                : `<svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> Add to Cart`}
+      ? "Out of Stock"
+      : `<svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> Add to Cart`}
             </button>
           </div>
 
@@ -251,6 +251,53 @@ function renderProductCard(msg) {
   chatWindow.scrollTop = chatWindow.scrollHeight;
   updateMsgCount(1);
 
+  // ── Fix 2: Live Stock onSnapshot for this product card ────────────────
+  // Subscribes directly to the product document in Firestore.
+  // When checkout decrements stock, this fires and updates the card UI.
+  if (productId && !productId.startsWith("card_")) {
+    db.collection("products").doc(productId).onSnapshot(snap => {
+      if (!snap.exists) return;
+      const liveStock = typeof snap.data().stock === "number" ? snap.data().stock : 0;
+      const isOos = liveStock <= 0;
+
+      // 1. Stock badge
+      const badgeEl = document.getElementById(cardId + "_stockBadge");
+      if (badgeEl) badgeEl.innerHTML = stockBadgeHtml(liveStock);
+
+      // 2. Add-to-Cart button — disable when OOS, update onclick max-stock
+      const addBtn = document.getElementById(cardId + "_addBtn");
+      if (addBtn) {
+        addBtn.disabled = isOos;
+        addBtn.style.opacity = isOos ? "0.4" : "1";
+        addBtn.style.cursor = isOos ? "not-allowed" : "pointer";
+        addBtn.setAttribute("onclick",
+          isOos ? "" : `addRecToCart('${cardId}','${safeName}',${price},${liveStock},'${productId}')`);
+        addBtn.innerHTML = isOos
+          ? "Out of Stock"
+          : `<svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> Add to Cart`;
+      }
+
+      // 3. Quantity + button — cap at new live stock
+      const plusEl = document.getElementById(cardId + "_plus");
+      const qtyEl = document.getElementById(cardId + "_qty");
+      if (plusEl) {
+        const curQty = parseInt(qtyEl?.textContent || "1", 10);
+        plusEl.disabled = isOos || curQty >= liveStock;
+        plusEl.style.opacity = plusEl.disabled ? "0.4" : "1";
+        plusEl.setAttribute("onclick", `changeQty('${cardId}',1,${liveStock})`);
+      }
+
+      // 4. Quantity - button — disable when OOS
+      const minusEl = document.getElementById(cardId + "_minus");
+      if (minusEl) {
+        minusEl.setAttribute("onclick", `changeQty('${cardId}',-1,${liveStock})`);
+        if (isOos) { minusEl.disabled = true; minusEl.style.opacity = "0.4"; }
+      }
+
+      console.log(`[ProductCard] Live stock update — ${productId}: ${liveStock}`);
+    }, err => console.warn("[ProductCard] stock listener error for", productId, ":", err));
+  }
+
   // Flash the live status dot
   const dot = document.querySelector("#db-status .w-2");
   if (dot) {
@@ -263,9 +310,9 @@ function renderProductCard(msg) {
 // QTY SELECTOR LOGIC (called from inline onclick)
 // ============================================================
 function changeQty(cardId, delta, maxStock) {
-  const qtyEl  = document.getElementById(cardId + "_qty");
+  const qtyEl = document.getElementById(cardId + "_qty");
   const minusEl = document.getElementById(cardId + "_minus");
-  const plusEl  = document.getElementById(cardId + "_plus");
+  const plusEl = document.getElementById(cardId + "_plus");
   if (!qtyEl) return;
 
   let qty = parseInt(qtyEl.textContent, 10) + delta;
@@ -274,11 +321,11 @@ function changeQty(cardId, delta, maxStock) {
 
   // Disable/enable +/- buttons at boundaries
   minusEl.disabled = qty <= 1;
-  plusEl.disabled  = qty >= maxStock;
-  if (plusEl.disabled)  plusEl.style.opacity = "0.4";
-  else                  plusEl.style.opacity = "1";
+  plusEl.disabled = qty >= maxStock;
+  if (plusEl.disabled) plusEl.style.opacity = "0.4";
+  else plusEl.style.opacity = "1";
   if (minusEl.disabled) minusEl.style.opacity = "0.4";
-  else                  minusEl.style.opacity = "1";
+  else minusEl.style.opacity = "1";
 }
 
 // ============================================================
@@ -286,7 +333,7 @@ function changeQty(cardId, delta, maxStock) {
 // ============================================================
 function addRecToCart(cardId, name, price, maxStock, explicitProductId) {
   const qtyEl = document.getElementById(cardId + "_qty");
-  const qty   = qtyEl ? parseInt(qtyEl.textContent, 10) : 1;
+  const qty = qtyEl ? parseInt(qtyEl.textContent, 10) : 1;
 
   if (qty < 1 || maxStock <= 0) return;
 
@@ -360,7 +407,7 @@ function startChatListener() {
         if (renderedIds.has(docId)) return;
         renderedIds.add(docId);
 
-        const msg     = { id: docId, ...change.doc.data() };
+        const msg = { id: docId, ...change.doc.data() };
         const isBuyer = msg.sender === "buyer";
 
         if (msg.sender === "system") {
@@ -544,7 +591,7 @@ function animateCart() {
 function renderCart() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
   const container = document.getElementById("cart-items");
-  const totalEl   = document.getElementById("cart-total");
+  const totalEl = document.getElementById("cart-total");
   if (!container) return;
 
   if (cart.length === 0) {
@@ -646,11 +693,11 @@ function closeCheckout() {
 
 function saveCurrentAddress() {
   const data = {
-    fullName:   document.getElementById("full-name").value,
-    phone:      document.getElementById("phone").value,
-    address:    document.getElementById("address").value,
-    city:       document.getElementById("city").value,
-    postalCode: document.getElementById("postal-code").value
+    fullName: document.getElementById("full-name").value,
+    phone: document.getElementById("phone").value,
+    address: document.getElementById("address").value,
+    city: document.getElementById("city").value,
+    district: document.getElementById("district").value
   };
   if (data.fullName || data.phone || data.address) {
     localStorage.setItem("savedAddress", JSON.stringify(data));
@@ -662,11 +709,11 @@ function loadSavedAddress() {
   if (!raw) return;
   const d = JSON.parse(raw);
   let hasData = false;
-  if (d.fullName)   { document.getElementById("full-name").value = d.fullName; hasData = true; }
-  if (d.phone)      { document.getElementById("phone").value = d.phone; hasData = true; }
-  if (d.address)    { document.getElementById("address").value = d.address; hasData = true; }
-  if (d.city)       { document.getElementById("city").value = d.city; hasData = true; }
-  if (d.postalCode) { document.getElementById("postal-code").value = d.postalCode; hasData = true; }
+  if (d.fullName) { document.getElementById("full-name").value = d.fullName; hasData = true; }
+  if (d.phone) { document.getElementById("phone").value = d.phone; hasData = true; }
+  if (d.address) { document.getElementById("address").value = d.address; hasData = true; }
+  if (d.city) { document.getElementById("city").value = d.city; hasData = true; }
+  if (d.district) { document.getElementById("district").value = d.district; hasData = true; }
   if (hasData) document.getElementById("address-saved-indicator")?.classList.remove("hidden");
 }
 
@@ -690,16 +737,16 @@ function renderCheckoutItems() {
 function calculateCheckoutTotals() {
   const cart = JSON.parse(localStorage.getItem("cart")) || [];
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
-  const fee  = 10000;
-  const tax  = Math.round(subtotal * 0.1);
+  const fee = 10000;
+  const tax = Math.round(subtotal * 0.1);
   const total = subtotal + fee + tax;
   document.getElementById("checkout-subtotal").textContent = `Rp ${subtotal.toLocaleString("id-ID")}`;
-  document.getElementById("checkout-tax").textContent      = `Rp ${tax.toLocaleString("id-ID")}`;
-  document.getElementById("checkout-total").textContent    = `Rp ${total.toLocaleString("id-ID")}`;
+  document.getElementById("checkout-tax").textContent = `Rp ${tax.toLocaleString("id-ID")}`;
+  document.getElementById("checkout-total").textContent = `Rp ${total.toLocaleString("id-ID")}`;
 }
 
 function validateForm() {
-  const f = ["full-name","phone","address","city","postal-code"].map(id => document.getElementById(id).value.trim());
+  const f = ["full-name", "phone", "address", "city", "district"].map(id => document.getElementById(id).value.trim());
   if (f.some(v => !v)) { alert("Please fill in all required fields."); return false; }
   if (f[1].length < 10) { alert("Please enter a valid phone number."); return false; }
   return true;
@@ -742,29 +789,29 @@ async function processOrder() {
     }
 
     // ── STEP 2: Build Order Data ────────────────────────────────────────
-    const subtotal   = cart.reduce((s, i) => s + i.price * i.quantity, 0);
-    const fee        = 10000;
-    const tax        = Math.round(subtotal * 0.1);
+    const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
+    const fee = 10000;
+    const tax = Math.round(subtotal * 0.1);
     const grandTotal = subtotal + fee + tax;
-    const fullName   = document.getElementById("full-name").value.trim();
-    const orderId    = "ORD-" + Math.floor(1000 + Math.random() * 9000);
+    const fullName = document.getElementById("full-name").value.trim();
+    const orderId = "ORD-" + Math.floor(1000 + Math.random() * 9000);
 
     const orderData = {
       // ── Seller-visible fields ──
-      buyerID:     SESSION_ID,
-      buyerName:   fullName,
-      items:       cart,
-      total:       grandTotal,
+      buyerID: SESSION_ID,
+      buyerName: fullName,
+      items: cart,
+      total: grandTotal,
       totalAmount: grandTotal,
-      status:      "new",
-      timestamp:   firebase.firestore.FieldValue.serverTimestamp(),
+      status: "new",
+      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
 
       // ── Receipt / UI fields ──
       fullName,
-      phone:         document.getElementById("phone").value,
-      address:       document.getElementById("address").value,
-      city:          document.getElementById("city").value,
-      postalCode:    document.getElementById("postal-code").value,
+      phone: document.getElementById("phone").value,
+      address: document.getElementById("address").value,
+      city: document.getElementById("city").value,
+      district: document.getElementById("district").value,
       paymentMethod: document.querySelector("input[name='payment']:checked").value,
       subtotal, deliveryFee: fee, tax,
       orderDate: new Date().toISOString(),
@@ -778,11 +825,11 @@ async function processOrder() {
     // ── STEP 3b: System notification → Seller Chat ─────────────────────
     const totalUSD = (grandTotal / 15000).toFixed(2);
     await messagesRef.add({
-      sender:    "system",
-      text:      "🛒 NEW ORDER PLACED! Total: $" + totalUSD +
-                 " (Rp " + grandTotal.toLocaleString("id-ID") + ")" +
-                 " | Order: " + orderId +
-                 " | Buyer: " + fullName,
+      sender: "system",
+      text: "🛒 NEW ORDER PLACED! Total: $" + totalUSD +
+        " (Rp " + grandTotal.toLocaleString("id-ID") + ")" +
+        " | Order: " + orderId +
+        " | Buyer: " + fullName,
       timestamp: firebase.firestore.FieldValue.serverTimestamp()
     });
 
@@ -804,8 +851,8 @@ async function processOrder() {
         const newStock = updatedSnap.exists ? (updatedSnap.data().stock ?? 0) : 0;
 
         messagesRef.add({
-          sender:    "buyer",
-          text:      `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name}. New stock: ${newStock}.`,
+          sender: "buyer",
+          text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name}. New stock: ${newStock}.`,
           timestamp: firebase.firestore.FieldValue.serverTimestamp()
         }).catch(e => console.warn("Chat notification failed:", e));
 
@@ -813,8 +860,8 @@ async function processOrder() {
         // Custom / unlinked item — no stock to decrement
         console.warn(`[Stock] Skipping decrement for unlinked item: ${item.name}`);
         messagesRef.add({
-          sender:    "buyer",
-          text:      `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name} (custom item — no stock linked).`,
+          sender: "buyer",
+          text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name} (custom item — no stock linked).`,
           timestamp: firebase.firestore.FieldValue.serverTimestamp()
         }).catch(e => console.warn("Chat notification failed:", e));
       }
@@ -854,18 +901,18 @@ function hideLoading() {
 
 // ── STATUS BADGE HELPERS ────────────────────────────────────────────────────
 const STATUS_STYLES = {
-  new:        { bg: "#fef3c7", color: "#92400e", label: "🟡 New — Awaiting Seller" },
-  preparing:  { bg: "#dbeafe", color: "#1e40af", label: "🔵 Preparing Your Order" },
-  ready:      { bg: "#d1fae5", color: "#065f46", label: "🟢 Ready for Pickup" },
+  new: { bg: "#fef3c7", color: "#92400e", label: "🟡 New — Awaiting Seller" },
+  preparing: { bg: "#dbeafe", color: "#1e40af", label: "🔵 Preparing Your Order" },
+  ready: { bg: "#d1fae5", color: "#065f46", label: "🟢 Ready for Pickup" },
   delivering: { bg: "#ede9fe", color: "#5b21b6", label: "🟣 Out for Delivery" },
-  delivered:  { bg: "#d1fae5", color: "#065f46", label: "✅ Delivered!" },
-  completed:  { bg: "#d1fae5", color: "#065f46", label: "✅ Completed" },
-  cancelled:  { bg: "#fee2e2", color: "#991b1b", label: "❌ Cancelled" },
+  delivered: { bg: "#d1fae5", color: "#065f46", label: "✅ Delivered!" },
+  completed: { bg: "#d1fae5", color: "#065f46", label: "✅ Completed" },
+  cancelled: { bg: "#fee2e2", color: "#991b1b", label: "❌ Cancelled" },
 };
 
 function statusBadgeHtml(status) {
   const s = STATUS_STYLES[String(status).toLowerCase()] ||
-            { bg: "#f3f4f6", color: "#374151", label: "⏳ " + status };
+    { bg: "#f3f4f6", color: "#374151", label: "⏳ " + status };
   return `<span id="receipt-status-badge" style="
     display:inline-block;
     padding:4px 12px;
@@ -910,6 +957,12 @@ function showSuccess(orderData, orderRef) {
       <div class="flex justify-between items-center" style="margin-top:8px;">
         <span class="text-gray-500">Status:</span>
         <div id="receipt-status-container">${statusBadgeHtml(orderData.status || "new")}</div>
+      </div>
+      <div class="mt-4 pt-4 border-t border-dashed border-gray-200">
+        <p class="text-gray-500 mb-1">Delivery Address:</p>
+        <p class="font-medium text-gray-800">${escapeHtml(orderData.address)}</p>
+        <p class="text-gray-600 text-xs mt-1">District: <span class="font-semibold text-gray-800">${escapeHtml(orderData.district || "-")}</span></p>
+        <p class="text-gray-600 text-xs">City: <span class="font-semibold text-gray-800">${escapeHtml(orderData.city || "-")}</span></p>
       </div>`;
   }
 
@@ -994,37 +1047,113 @@ function closeSuccess() {
   if (form) form.reset();
 }
 
-// ============================================================
-// ORDER HISTORY MODAL
-// ============================================================
+let _historyUnsubs = [];
+
 function showOrderHistory() {
   const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
-  const body    = document.getElementById("history-modal-body");
-  const modal   = document.getElementById("history-modal");
+  const body = document.getElementById("history-modal-body");
+  const modal = document.getElementById("history-modal");
+  const container = document.getElementById("history-container");
 
   if (!body || !modal) return;
+
+  // Cleanup old listeners if any
+  _historyUnsubs.forEach(unsub => unsub());
+  _historyUnsubs = [];
 
   if (history.length === 0) {
     body.innerHTML = `<p class="text-gray-400 text-center py-8">No orders yet.</p>`;
   } else {
     body.innerHTML = history.map(o => `
-      <div class="glass-morphism rounded-xl p-4 space-y-1">
-        <p class="text-xs text-gray-400">${new Date(o.orderDate).toLocaleString("id-ID")}</p>
-        <p class="gold-text font-bold text-sm">${o.orderId}</p>
-        <p class="text-gray-300 text-sm">${o.items.map(i => `${i.quantity}× ${escapeHtml(i.name)}`).join(", ")}</p>
-        <p class="text-white font-semibold">Rp ${o.total.toLocaleString("id-ID")}</p>
-        <span class="inline-block text-xs px-2 py-0.5 rounded-full" style="background:rgba(74,222,128,0.15);color:#4ade80;border:1px solid rgba(74,222,128,0.3)">Completed</span>
+      <div class="glass-morphism rounded-xl p-5 mb-4 space-y-3 relative overflow-hidden">
+        <div class="flex justify-between items-start border-b border-gray-700 pb-2">
+          <div>
+            <p class="gold-text font-bold">${o.orderId}</p>
+            <p class="text-xs text-gray-400 mt-1">${new Date(o.orderDate).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</p>
+          </div>
+          <div id="history-status-${o.firestoreId}">${statusBadgeHtml(o.status || "new")}</div>
+        </div>
+        
+        <div class="text-sm">
+          <p class="text-gray-400 text-xs mb-1 uppercase tracking-wider">Delivery Details</p>
+          <p class="text-white font-medium">${escapeHtml(o.address || "-")}</p>
+          <p class="text-gray-300 text-xs mt-0.5">${escapeHtml(o.district || "-")} • ${escapeHtml(o.city || "-")}</p>
+        </div>
+
+        <div class="text-sm border-t border-gray-700 pt-2 mt-2">
+          <p class="text-gray-400 text-xs mb-1 uppercase tracking-wider">Items</p>
+          <ul class="space-y-1">
+            ${o.items.map(i => `
+              <li class="flex justify-between text-gray-300">
+                <span>${i.quantity}× ${escapeHtml(i.name)}</span>
+                <span>Rp ${(i.price * i.quantity).toLocaleString("id-ID")}</span>
+              </li>
+            `).join("")}
+          </ul>
+        </div>
+
+        <div class="flex justify-between items-center border-t border-dashed border-gray-600 pt-3 mt-3">
+          <span class="font-bold text-gray-200">TOTAL</span>
+          <span class="font-bold text-white text-lg">Rp ${o.total.toLocaleString("id-ID")}</span>
+        </div>
       </div>`).join("");
+
+    // Attach listeners
+    history.forEach(o => {
+      if (!o.firestoreId) return;
+      const unsub = db.collection("orders").doc(o.firestoreId).onSnapshot(doc => {
+        if (!doc.exists) return;
+        const newStatus = doc.data().status || "new";
+        
+        // Update localStorage so next time it opens it has the latest status
+        const currentHistory = JSON.parse(localStorage.getItem("orderHistory")) || [];
+        const idx = currentHistory.findIndex(x => x.firestoreId === o.firestoreId);
+        if (idx !== -1 && currentHistory[idx].status !== newStatus) {
+            currentHistory[idx].status = newStatus;
+            localStorage.setItem("orderHistory", JSON.stringify(currentHistory));
+        }
+
+        const statusContainer = document.getElementById(`history-status-${o.firestoreId}`);
+        if (statusContainer && statusContainer.innerHTML !== statusBadgeHtml(newStatus)) {
+          statusContainer.innerHTML = statusBadgeHtml(newStatus);
+          // Visual pulse to signal a live update
+          statusContainer.style.transition = "opacity 0.2s";
+          statusContainer.style.opacity = "0";
+          setTimeout(() => { statusContainer.style.opacity = "1"; }, 200);
+        }
+      });
+      _historyUnsubs.push(unsub);
+    });
   }
 
   modal.classList.remove("hidden");
-  setTimeout(() => modal.classList.add("flex"), 10);
+  modal.classList.add("flex");
+  void modal.offsetWidth; // trigger reflow
+  modal.classList.remove("opacity-0");
+  if (container) {
+    container.classList.remove("translate-x-full");
+    container.classList.add("translate-x-0");
+  }
 }
 
 function closeHistoryModal() {
   const modal = document.getElementById("history-modal");
-  modal.classList.remove("flex");
-  setTimeout(() => modal.classList.add("hidden"), 300);
+  const container = document.getElementById("history-container");
+  
+  if (container) {
+    container.classList.remove("translate-x-0");
+    container.classList.add("translate-x-full");
+  }
+  modal.classList.add("opacity-0");
+  
+  setTimeout(() => {
+    modal.classList.remove("flex");
+    modal.classList.add("hidden");
+    
+    // Unsubscribe when closed
+    _historyUnsubs.forEach(unsub => unsub());
+    _historyUnsubs = [];
+  }, 300);
 }
 
 // ============================================================
@@ -1033,32 +1162,93 @@ function closeHistoryModal() {
 let checkoutMap = null;
 let checkoutMarker = null;
 
+// ── Reverse geocode a lat/lng via Nominatim ──────────────────
+async function reverseGeocode(lat, lng) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`;
+    const res = await fetch(url, { headers: { "Accept-Language": "id,en" } });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn("[Nominatim] Reverse geocode failed:", e);
+    return null;
+  }
+}
+
+// ── Autofill delivery form fields ────────
+function autofillAddress(geo) {
+  if (!geo || !geo.address) return;
+  const a = geo.address;
+  
+  // Use street name or a shortened version of the display_name to avoid excessive length
+  const addressLine = a.road || geo.display_name?.split(",").slice(0, 2).join(",").trim() || "";
+  
+  // Robust city fallback chain
+  const cityStr = a.city || a.town || a.municipality || a.village || a.county || "Unknown City";
+  
+  // District logic (suburb or neighbourhood)
+  const districtStr = a.suburb || a.neighbourhood || a.village || "";
+
+  const addressEl = document.getElementById("address");
+  const cityEl    = document.getElementById("city");
+  const districtEl  = document.getElementById("district");
+
+  // Forcefully autofill so dragging the pin always updates the form
+  if (addressEl) addressEl.value = addressLine;
+  if (cityEl) cityEl.value = cityStr;
+  if (districtEl) districtEl.value = districtStr;
+
+  // Show visual hint
+  document.getElementById("address-saved-indicator")?.classList.remove("hidden");
+  console.log("[Map] Address autofilled from Nominatim:", { addressLine, cityStr, districtStr });
+}
+
 function initCheckoutMap() {
   const container = document.getElementById("checkout-map-container");
-  const btn       = document.getElementById("pin-location-btn");
+  const btn = document.getElementById("pin-location-btn");
   container.style.display = "block";
   if (btn) btn.style.display = "none";
 
   if (checkoutMap) { checkoutMap.invalidateSize(); return; }
 
+  // Geographic fallback
   checkoutMap = L.map("checkout-map").setView([-6.2088, 106.8456], 13);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "© OpenStreetMap contributors"
   }).addTo(checkoutMap);
 
   checkoutMarker = L.marker([-6.2088, 106.8456], { draggable: true }).addTo(checkoutMap);
-  checkoutMarker.on("dragend", e => {
+
+  // Drag → reverse geocode → autofill
+  checkoutMarker.on("dragend", async e => {
     const { lat, lng } = e.target.getLatLng();
     document.getElementById("map-coords").textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const geo = await reverseGeocode(lat, lng);
+    if (geo) autofillAddress(geo);
   });
 
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(pos => {
-      const { latitude: lat, longitude: lng } = pos.coords;
-      checkoutMap.setView([lat, lng], 15);
-      checkoutMarker.setLatLng([lat, lng]);
-      document.getElementById("map-coords").textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    });
+  // Location found → move marker + autofill address
+  checkoutMap.on("locationfound", async e => {
+    const { lat, lng } = e.latlng;
+    checkoutMarker.setLatLng([lat, lng]);
+    document.getElementById("map-coords").textContent = `📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const geo = await reverseGeocode(lat, lng);
+    if (geo) autofillAddress(geo);
+  });
+
+  // Location error → stay on fallback
+  checkoutMap.on("locationerror", e => {
+    console.warn("[Map] Geolocation unavailable:", e.message);
+  });
+
+  // Start auto-locate automatically
+  triggerMapLocate();
+}
+
+function triggerMapLocate() {
+  if (checkoutMap) {
+    document.getElementById("map-coords").textContent = "📍 Detecting location...";
+    checkoutMap.locate({ setView: true, maxZoom: 16 });
   }
 }
 
@@ -1066,16 +1256,16 @@ function initCheckoutMap() {
 // DOM READY — wire up all event listeners & start listener
 // ============================================================
 document.addEventListener("DOMContentLoaded", () => {
-  const sendBtn       = document.getElementById("send-btn");
-  const input         = document.getElementById("user-input");
-  const cartBtn       = document.getElementById("cart-btn");
-  const closeCartBtn  = document.getElementById("close-cart");
-  const clearCartBtn  = document.getElementById("clear-cart-btn");
-  const checkoutBtn      = document.getElementById("checkout-btn");
-  const cartOverlay      = document.getElementById("cart-overlay");
+  const sendBtn = document.getElementById("send-btn");
+  const input = document.getElementById("user-input");
+  const cartBtn = document.getElementById("cart-btn");
+  const closeCartBtn = document.getElementById("close-cart");
+  const clearCartBtn = document.getElementById("clear-cart-btn");
+  const checkoutBtn = document.getElementById("checkout-btn");
+  const cartOverlay = document.getElementById("cart-overlay");
   const closeCheckoutBtn = document.getElementById("close-checkout");
-  const placeOrderBtn    = document.getElementById("place-order-btn");
-  const closeSuccessBtn  = document.getElementById("close-success");
+  const placeOrderBtn = document.getElementById("place-order-btn");
+  const closeSuccessBtn = document.getElementById("close-success");
 
   sendBtn?.addEventListener("click", sendMessage);
   input?.addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
