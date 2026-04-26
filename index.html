@@ -6,8 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tempat. | Chat with Our Seller</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link href="style.css" rel="stylesheet">
@@ -271,7 +270,8 @@
                                                 placeholder="City">
                                         </div>
                                         <div>
-                                            <label class="block text-sm font-medium text-gray-300 mb-1">District / Area</label>
+                                            <label class="block text-sm font-medium text-gray-300 mb-1">District /
+                                                Area</label>
                                             <input type="text" id="district" required
                                                 class="w-full luxury-input p-3 rounded-lg text-white placeholder-gray-500"
                                                 placeholder="District / Area">
@@ -305,12 +305,21 @@
                                         <div id="checkout-map-container"
                                             style="display:none;margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid rgba(212,175,55,0.3);">
                                             <div id="checkout-map" style="height:300px;width:100%;"></div>
-                                            <div class="flex items-center justify-between" style="background:rgba(0,0,0,0.6);padding:8px 12px;">
+                                            <div class="flex items-center justify-between"
+                                                style="background:rgba(0,0,0,0.6);padding:8px 12px;">
                                                 <div id="map-coords" style="font-size:11px;color:#9ca3af;">
                                                     📍 Drag the pin to your exact location
                                                 </div>
-                                                <button type="button" onclick="triggerMapLocate()" style="background:rgba(212,175,55,0.2);color:#D4AF37;border:1px solid rgba(212,175,55,0.5);border-radius:4px;padding:4px 8px;font-size:10px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(212,175,55,0.3)'" onmouseout="this.style.background='rgba(212,175,55,0.2)'">
-                                                    <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 22s-8-4.5-8-11.8A8 8 0 0112 2a8 8 0 018 8.2c0 7.3-8 11.8-8 11.8z"/><circle cx="12" cy="10" r="3"/></svg>
+                                                <button type="button" onclick="triggerMapLocate()"
+                                                    style="background:rgba(212,175,55,0.2);color:#D4AF37;border:1px solid rgba(212,175,55,0.5);border-radius:4px;padding:4px 8px;font-size:10px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer;transition:all 0.2s;"
+                                                    onmouseover="this.style.background='rgba(212,175,55,0.3)'"
+                                                    onmouseout="this.style.background='rgba(212,175,55,0.2)'">
+                                                    <svg width="12" height="12" fill="none" stroke="currentColor"
+                                                        stroke-width="2" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round"
+                                                            d="M12 22s-8-4.5-8-11.8A8 8 0 0112 2a8 8 0 018 8.2c0 7.3-8 11.8-8 11.8z" />
+                                                        <circle cx="12" cy="10" r="3" />
+                                                    </svg>
                                                     Detect Location
                                                 </button>
                                             </div>
@@ -421,8 +430,17 @@
         </div>
     </div>
 
+    <!-- Status Toast Notification -->
+    <div id="status-toast" class="status-toast">
+        <div class="toast-content">
+            <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <span id="toast-message">Status Update!</span>
+        </div>
+    </div>
+
     <!-- History Modal -->
-    <div id="history-modal" class="fixed inset-0 bg-black/80 z-[10002] hidden opacity-0 transition-opacity duration-300 justify-end items-start p-4 lg:p-8">
+    <div id="history-modal"
+        class="fixed inset-0 bg-black/80 z-[10002] hidden opacity-0 transition-opacity duration-300 justify-end items-start p-4 lg:p-8">
         <div id="history-container"
             class="bg-black/95 glass-morphism border gold-border rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col translate-x-full transition-transform duration-300 ease-out shadow-2xl mt-4">
             <div class="flex items-center justify-between p-6 border-b border-yellow-900/30 flex-shrink-0">

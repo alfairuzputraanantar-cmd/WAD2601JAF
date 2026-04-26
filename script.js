@@ -1,18 +1,9 @@
 // ============================================================
-// FIREBASE CONFIG & INIT
+// SUPABASE CONFIG & INIT
 // ============================================================
-const firebaseConfig = {
-  apiKey: "AIzaSyCIYc8Epfu3jmrewyRaVGc4ISm7qKxG03k",
-  authDomain: "localluxury-cb0d7.firebaseapp.com",
-  projectId: "localluxury-cb0d7",
-  storageBucket: "localluxury-cb0d7.firebasestorage.app",
-  messagingSenderId: "425958954222",
-  appId: "1:425958954222:web:0bfcdedbfbac2697a40fff",
-  measurementId: "G-DHC0N06PZB"
-};
-
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+const SUPABASE_URL = "https://bnqhrwccxzjrnmxyzbvc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_aQgx6XXGRxZElZI_3FYGgg_3HMtn8TD";
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================================
 // SESSION ID — unique per browser tab so buyer/seller
@@ -24,12 +15,7 @@ const SESSION_ID = localStorage.getItem("buyerSessionId") || (() => {
   return id;
 })();
 
-// ============================================================
-// MESSAGE COLLECTION REF — must match what Seller uses
-// ============================================================
-const CHAT_COLLECTION_PATH = "chats/session_01/messages";
-const messagesRef = db.collection(CHAT_COLLECTION_PATH);
-console.log("[Buyer] Connected to Chat Collection:", CHAT_COLLECTION_PATH);
+console.log("[Buyer] Connected to Supabase");
 
 // ============================================================
 // RENDERED MESSAGE TRACKING — prevent duplicate renders
@@ -37,34 +23,48 @@ console.log("[Buyer] Connected to Chat Collection:", CHAT_COLLECTION_PATH);
 const renderedIds = new Set();
 
 // ============================================================
+// GLOBAL ORDER LISTENER TRACKING
+// ============================================================
+let activeOrderId = null;
+let globalOrderUnsub = null;
+let previousStatus = null;
+
+// ============================================================
 // HELPER: format timestamp
 // ============================================================
 function formatTime(ts) {
-  const d = ts ? ts.toDate() : new Date();
+  let d;
+  if (!ts) d = new Date();
+  else if (ts.toDate) d = ts.toDate(); // legacy Firestore timestamp guard (should not occur)
+  else d = new Date(ts); // Supabase ISO string
   return d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
 }
 
 // ============================================================
-// SEND A TEXT MESSAGE (BUYER → FIREBASE)
+// SEND A TEXT MESSAGE (BUYER → SUPABASE)
 // ============================================================
 async function sendMessage() {
   const input = document.getElementById("user-input");
-  const text = input.value.trim();
+  const rawText = input.value;
+  input.value = ""; // Clear immediately after reading
+
+  const text = rawText.replace(/\n/g, " ").trim();
   if (!text) return;
 
-  input.value = "";
   input.disabled = true;
   // Clear typing indicator immediately on send
   localStorage.setItem("buyer_typing", "0");
 
   try {
-    await messagesRef.add({
+    const { error } = await supabaseClient.from('messages').insert([{
       text,
       sender: "buyer",
-      sessionId: SESSION_ID,
-      type: "text",
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    });
+      session_id: "session_01",
+      type: "text"
+      // created_at defaults to now() in Postgres
+    }]);
+
+    if (error) throw error;
   } catch (err) {
     console.error("Failed to send message:", err);
     // Restore input on error
@@ -83,10 +83,10 @@ function renderTextBubble(msg, isBuyer) {
   const row = document.createElement("div");
   row.className = `chat-msg-row ${isBuyer ? "chat-msg-row--buyer" : "chat-msg-row--seller"}`;
 
-  // Tag the row with the Firestore doc ID for removal on 'deleted' events
+  // Tag the row with the Supabase row ID for removal on 'deleted' events
   if (msg.id) row.id = "msg_" + msg.id;
 
-  const ts = formatTime(msg.timestamp);
+  const ts = formatTime(msg.created_at || msg.timestamp);
 
   if (isBuyer) {
     // Buyer bubble — gold, right-aligned, with hover-reveal ✕ delete button
@@ -137,7 +137,7 @@ function renderSystemNotification(msg) {
   row.className = "chat-msg-row";
   if (msg.id) row.id = "msg_" + msg.id;
 
-  const ts = formatTime(msg.timestamp);
+  const ts = formatTime(msg.created_at || msg.timestamp);
   row.innerHTML = `
     <div style="
       width:100%;
@@ -176,7 +176,7 @@ function renderProductCard(msg) {
   const stock = typeof msg.stock === "number" ? msg.stock : 99;
   const productId = msg.productId || "";  // NEEDED for order decrement logic
   const outOfStock = stock <= 0;
-  const ts = formatTime(msg.timestamp);
+  const ts = formatTime(msg.created_at || msg.timestamp);
 
   // Unique ID per card for DOM targeting
   const cardId = "card_" + (msg.id || Date.now() + Math.random()).toString().replace(/\./g, "_");
@@ -251,20 +251,16 @@ function renderProductCard(msg) {
   chatWindow.scrollTop = chatWindow.scrollHeight;
   updateMsgCount(1);
 
-  // ── Fix 2: Live Stock onSnapshot for this product card ────────────────
-  // Subscribes directly to the product document in Firestore.
-  // When checkout decrements stock, this fires and updates the card UI.
+  // ── Live Stock Supabase Listener ────────────────
   if (productId && !productId.startsWith("card_")) {
-    db.collection("products").doc(productId).onSnapshot(snap => {
-      if (!snap.exists) return;
-      const liveStock = typeof snap.data().stock === "number" ? snap.data().stock : 0;
+    const applyStock = (liveStock) => {
       const isOos = liveStock <= 0;
 
       // 1. Stock badge
       const badgeEl = document.getElementById(cardId + "_stockBadge");
       if (badgeEl) badgeEl.innerHTML = stockBadgeHtml(liveStock);
 
-      // 2. Add-to-Cart button — disable when OOS, update onclick max-stock
+      // 2. Add-to-Cart button
       const addBtn = document.getElementById(cardId + "_addBtn");
       if (addBtn) {
         addBtn.disabled = isOos;
@@ -277,7 +273,7 @@ function renderProductCard(msg) {
           : `<svg style="width:13px;height:13px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"/></svg> Add to Cart`;
       }
 
-      // 3. Quantity + button — cap at new live stock
+      // 3. Quantity + button
       const plusEl = document.getElementById(cardId + "_plus");
       const qtyEl = document.getElementById(cardId + "_qty");
       if (plusEl) {
@@ -287,15 +283,26 @@ function renderProductCard(msg) {
         plusEl.setAttribute("onclick", `changeQty('${cardId}',1,${liveStock})`);
       }
 
-      // 4. Quantity - button — disable when OOS
+      // 4. Quantity - button
       const minusEl = document.getElementById(cardId + "_minus");
       if (minusEl) {
         minusEl.setAttribute("onclick", `changeQty('${cardId}',-1,${liveStock})`);
         if (isOos) { minusEl.disabled = true; minusEl.style.opacity = "0.4"; }
       }
-
       console.log(`[ProductCard] Live stock update — ${productId}: ${liveStock}`);
-    }, err => console.warn("[ProductCard] stock listener error for", productId, ":", err));
+    };
+
+    // Initial Fetch
+    supabaseClient.from('products').select('stock').eq('id', productId).single().then(({ data }) => {
+      if (data) applyStock(data.stock || 0);
+    });
+
+    // Realtime subscription
+    supabaseClient.channel(`product_${productId}_${Date.now()}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'products', filter: `id=eq.${productId}` }, payload => {
+        applyStock(payload.new.stock || 0);
+      })
+      .subscribe();
   }
 
   // Flash the live status dot
@@ -379,48 +386,54 @@ function addToCartWithQty(product, qty) {
 }
 
 // ============================================================
-// FIREBASE REAL-TIME LISTENER — onSnapshot
+// SUPABASE REAL-TIME LISTENER — Messages
 // ============================================================
-function startChatListener() {
-  messagesRef
-    .orderBy("timestamp", "asc")
-    .onSnapshot(snapshot => {
-      snapshot.docChanges().forEach(change => {
-        const docId = change.doc.id;
+async function startChatListener() {
+  function renderIncomingMessage(msg) {
+    if (renderedIds.has(msg.id)) return;
+    renderedIds.add(msg.id);
 
-        // ── REMOVED: doc was deleted from Firestore ──────────────────
-        if (change.type === "removed") {
-          renderedIds.delete(docId);
-          const el = document.getElementById("msg_" + docId);
-          if (el) {
-            el.style.transition = "opacity 0.25s, transform 0.25s";
-            el.style.opacity = "0";
-            el.style.transform = "scale(0.95)";
-            setTimeout(() => el.remove(), 260);
-          }
-          updateMsgCount(-1);
-          return;
+    const isBuyer = msg.sender === "buyer";
+    if (msg.sender === "system") {
+      renderSystemNotification(msg);
+    } else if (msg.type === "product" && !isBuyer) {
+      renderProductCard(msg);
+    } else {
+      renderTextBubble(msg, isBuyer);
+    }
+  }
+
+  // 1. Initial Fetch
+  const { data: existingDocs, error } = await supabaseClient
+    .from('messages')
+    .select('*')
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.error("Chat fetch error:", error);
+  } else if (existingDocs) {
+    existingDocs.forEach(renderIncomingMessage);
+  }
+
+  // 2. Real-time Subscription
+  supabaseClient.channel('public:messages')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
+      if (payload.eventType === 'DELETE') {
+        const docId = payload.old.id;
+        renderedIds.delete(docId);
+        const el = document.getElementById("msg_" + docId);
+        if (el) {
+          el.style.transition = "opacity 0.25s, transform 0.25s";
+          el.style.opacity = "0";
+          el.style.transform = "scale(0.95)";
+          setTimeout(() => el.remove(), 260);
         }
-
-        // ── ADDED: new message incoming ──────────────────────────────
-        if (change.type !== "added") return;
-        if (renderedIds.has(docId)) return;
-        renderedIds.add(docId);
-
-        const msg = { id: docId, ...change.doc.data() };
-        const isBuyer = msg.sender === "buyer";
-
-        if (msg.sender === "system") {
-          renderSystemNotification(msg);
-        } else if (msg.type === "product" && !isBuyer) {
-          renderProductCard(msg);
-        } else {
-          renderTextBubble(msg, isBuyer);
-        }
-      });
-    }, err => {
-      console.error("Chat listener error:", err);
-    });
+        updateMsgCount(-1);
+      } else if (payload.eventType === 'INSERT') {
+        renderIncomingMessage(payload.new);
+      }
+    })
+    .subscribe();
 }
 
 // ============================================================
@@ -449,13 +462,14 @@ function updateMsgCount(delta) {
 
 // ============================================================
 // DELETE SINGLE MESSAGE (Buyer only)
-// Removes the Firestore doc — onSnapshot 'removed' cleans the UI
-// automatically for both Buyer and Seller in real-time.
+// Removes the Supabase row — the realtime channel 'DELETE' event
+// cleans the UI automatically for both Buyer and Seller in real-time.
 // ============================================================
 async function deleteMessage(msgId) {
   if (!msgId) return;
   try {
-    await messagesRef.doc(msgId).delete();
+    const { error } = await supabaseClient.from('messages').delete().eq('id', msgId);
+    if (error) throw error;
   } catch (err) {
     console.error("deleteMessage failed:", err);
     showChatToast("Could not delete message.", "#ef4444");
@@ -464,7 +478,7 @@ async function deleteMessage(msgId) {
 
 // ============================================================
 // CLEAR ALL MESSAGES — batch-delete every doc in the collection
-// Firestore doesn't support collection-level delete natively;
+// Supabase supports standard SQL DELETE; this wrapper deletes a single message
 // we query all docs and delete in batches of 490.
 // The onSnapshot 'removed' events propagate to the Seller
 // in real-time, emptying their chat panel too.
@@ -476,26 +490,16 @@ async function clearAllMessages() {
   if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; }
 
   try {
-    // Fetch all docs (no limit — session should stay manageable)
-    const snapshot = await messagesRef.get();
-    if (snapshot.empty) {
-      showChatToast("Chat is already empty.", "#6b7280");
-      return;
-    }
+    const { error } = await supabaseClient.from('messages').delete().neq('sender', 'nobody_123'); // delete all records
+    if (error) throw error;
 
-    // Firestore batch: max 500 writes per batch
-    const BATCH_SIZE = 490;
-    const docs = snapshot.docs;
-    for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-      const batch = db.batch();
-      docs.slice(i, i + BATCH_SIZE).forEach(doc => batch.delete(doc.ref));
-      await batch.commit();
-    }
-
-    // Reset local counter; DOM is cleaned by onSnapshot 'removed'
+    // Reset local counter; DOM is cleaned by onSnapshot 'removed' or by reload
     _msgCount = 0;
     updateMsgCount(0);
     showChatToast("💬 Conversation cleared.", "#4ade80");
+
+    // Quick DOM cleanup since we deleted them
+    document.getElementById("chat-window").innerHTML = "";
   } catch (err) {
     console.error("clearAllMessages failed:", err);
     showChatToast("Could not clear chat. Check console.", "#ef4444");
@@ -753,7 +757,7 @@ function validateForm() {
 }
 
 // Holds the active onSnapshot unsubscribe fn for the live order status listener
-let _orderStatusUnsub = null;
+// Removed: _orderStatusUnsub
 
 async function processOrder() {
   if (!validateForm()) return;
@@ -765,26 +769,19 @@ async function processOrder() {
 
   try {
     // ── STEP 1: Stock Validation (pre-flight read) ──────────────────────
-    // Read live Firestore stock for every linked item BEFORE writing anything.
-    // If ANY item is over-stock, abort immediately.
     for (const item of cart) {
-      const pid = item.productId || item.id;   // cart stores key as 'productId'
-      if (!pid || pid.startsWith("card_")) {
-        console.warn("[Stock check] skipping unlinked item:", item.name);
-        continue;
-      }
-      const docSnap = await db.collection("products").doc(pid).get();
-      if (docSnap.exists) {
-        const currentStock = typeof docSnap.data().stock === "number"
-          ? docSnap.data().stock : 0;
+      const pid = item.productId || item.id;
+      if (!pid || pid.startsWith("card_")) continue;
+
+      const { data: docSnap } = await supabaseClient.from("products").select("stock").eq("id", pid).single();
+      if (docSnap) {
+        const currentStock = typeof docSnap.stock === "number" ? docSnap.stock : 0;
         console.log(`[Stock check] ${item.name}: requested=${item.quantity}, available=${currentStock}`);
         if (item.quantity > currentStock) {
           hideLoading();
           alert(`⚠️ Not enough stock!\n"${item.name}" only has ${currentStock} left. Please update your cart.`);
-          return;   // ← abort entire checkout
+          return;
         }
-      } else {
-        console.warn(`[Stock check] Product doc not found for pid: ${pid}`);
       }
     }
 
@@ -797,91 +794,87 @@ async function processOrder() {
     const orderId = "ORD-" + Math.floor(1000 + Math.random() * 9000);
 
     const orderData = {
-      // ── Seller-visible fields ──
-      buyerID: SESSION_ID,
-      buyerName: fullName,
+      orderId,
       items: cart,
       total: grandTotal,
-      totalAmount: grandTotal,
       status: "new",
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-
-      // ── Receipt / UI fields ──
       fullName,
-      phone: document.getElementById("phone").value,
       address: document.getElementById("address").value,
       city: document.getElementById("city").value,
       district: document.getElementById("district").value,
       paymentMethod: document.querySelector("input[name='payment']:checked").value,
-      subtotal, deliveryFee: fee, tax,
-      orderDate: new Date().toISOString(),
-      orderId
+      orderDate: new Date().toISOString()
     };
 
-    // ── STEP 3: Write Order → capture the new DocumentReference ────────
-    const orderRef = await db.collection("orders").add(orderData);
-    console.log("[Order] Written to Firestore:", orderRef.id);
+    // ── STEP 3: Write Order ────────
+    const { data: orderDataRes, error: orderErr } = await supabaseClient.from("orders").insert([orderData]).select("id").single();
+    if (orderErr) throw orderErr;
+    const orderRef = { id: orderDataRes.id };
+    console.log("[Order] Written to Supabase:", orderRef.id);
 
     // ── STEP 3b: System notification → Seller Chat ─────────────────────
     const totalUSD = (grandTotal / 15000).toFixed(2);
-    await messagesRef.add({
+    await supabaseClient.from("messages").insert([{
       sender: "system",
       text: "🛒 NEW ORDER PLACED! Total: $" + totalUSD +
         " (Rp " + grandTotal.toLocaleString("id-ID") + ")" +
         " | Order: " + orderId +
         " | Buyer: " + fullName,
-      timestamp: firebase.firestore.FieldValue.serverTimestamp()
-    });
+      session_id: "session_01",
+      type: "text"
+    }]);
 
     // ── STEP 4: Decrement Stock (atomic server-side) ────────────────────
     for (const item of cart) {
       const pid = item.productId || item.id;
 
       if (pid && !pid.startsWith("card_")) {
-        const prodRef = db.collection("products").doc(pid);
-
-        // Atomic decrement — safe under concurrent writes
-        await prodRef.update({
-          stock: firebase.firestore.FieldValue.increment(-item.quantity)
-        });
+        await supabaseClient.rpc('decrement_stock', { p_id: pid, p_qty: item.quantity });
         console.log(`[Stock] Decremented ${item.name} (${pid}) by ${item.quantity}`);
 
-        // Read confirmed new stock for the chat notification
-        const updatedSnap = await prodRef.get();
-        const newStock = updatedSnap.exists ? (updatedSnap.data().stock ?? 0) : 0;
+        // Fetch new stock purely for chat notification context
+        const { data: updatedSnap } = await supabaseClient.from('products').select('stock').eq('id', pid).single();
+        const newStock = updatedSnap ? (updatedSnap.stock ?? 0) : 0;
 
-        messagesRef.add({
+        supabaseClient.from('messages').insert([{
           sender: "buyer",
           text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name}. New stock: ${newStock}.`,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp()
-        }).catch(e => console.warn("Chat notification failed:", e));
-
+          session_id: "session_01",
+          type: "text"
+        }]);
       } else {
         // Custom / unlinked item — no stock to decrement
         console.warn(`[Stock] Skipping decrement for unlinked item: ${item.name}`);
-        messagesRef.add({
+        supabaseClient.from('messages').insert([{
           sender: "buyer",
           text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name} (custom item — no stock linked).`,
-          timestamp: firebase.firestore.FieldValue.serverTimestamp()
-        }).catch(e => console.warn("Chat notification failed:", e));
+          session_id: "session_01",
+          type: "text"
+        }]);
       }
     }
 
     // ── STEP 5: Finalise UI ─────────────────────────────────────────────
+    orderData.subtotal = subtotal;
+    orderData.tax = tax;
+    orderData.deliveryFee = fee;
+
     const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
-    history.unshift({ ...orderData, firestoreId: orderRef.id });
+    history.unshift({ ...orderData, supabaseId: orderRef.id });
     localStorage.setItem("orderHistory", JSON.stringify(history));
 
     hideLoading();
     closeCheckout();
     clearCart();
-    // Pass the live Firestore ref so the receipt can subscribe to status changes
+    // Pass the live Supabase ID so the receipt can subscribe to status changes
+    activeOrderId = orderRef.id;
+    startGlobalOrderListener(orderRef.id);
     showSuccess(orderData, orderRef);
 
   } catch (error) {
-    console.error("processOrder failed:", error);
+    console.error("processOrder failed:", JSON.stringify(error, null, 2));
     hideLoading();
-    alert("Checkout failed. Please check your connection and try again.\n\nDetails: " + error.message);
+    alert("Checkout failed. Please check your connection and try again.\n\nDetails: " + (error.message || JSON.stringify(error)));
   }
 }
 
@@ -1002,38 +995,109 @@ function showSuccess(orderData, orderRef) {
   }
 
   // 4. Live Order Status listener ─────────────────────────────────────────
-  // Tear down any previous listener first
-  if (_orderStatusUnsub) { _orderStatusUnsub(); _orderStatusUnsub = null; }
+  // Note: Local listener removed. The global listener handles this now.
+  // We simply rely on startGlobalOrderListener() to update the DOM via ID.
+}
 
-  if (orderRef) {
-    console.log("[Status] Starting live listener on order:", orderRef.id);
-    _orderStatusUnsub = orderRef.onSnapshot(doc => {
-      if (!doc.exists) return;
-      const newStatus = doc.data().status || "new";
-      console.log("[Status] Update received:", newStatus);
+// ============================================================
+// TOAST NOTIFICATION LOGIC
+// ============================================================
+let toastTimeout = null;
+function showStatusToast(newStatus) {
+  const toast = document.getElementById("status-toast");
+  const msg = document.getElementById("toast-message");
+  if (!toast || !msg) return;
 
-      const container = document.getElementById("receipt-status-container");
-      if (container) {
-        container.innerHTML = statusBadgeHtml(newStatus);
+  msg.innerText = `Update: Your order is now ${newStatus.toUpperCase()}!`;
+  toast.classList.add("show");
+  playNotificationSound();
 
-        // Visual pulse to signal a live update
-        container.style.transition = "opacity 0.2s";
-        container.style.opacity = "0";
-        setTimeout(() => { container.style.opacity = "1"; }, 200);
-      }
-    }, err => {
-      console.error("[Status] onSnapshot error:", err);
-    });
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 4500);
+}
+
+function playNotificationSound() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+    osc.frequency.exponentialRampToValueAtTime(1046.50, ctx.currentTime + 0.1); // C6
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.1, ctx.currentTime + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (e) {
+    console.warn("Audio error", e);
   }
+}
+
+function startGlobalOrderListener(orderId) {
+  if (globalOrderUnsub) {
+    supabaseClient.removeChannel(globalOrderUnsub);
+    globalOrderUnsub = null;
+  }
+
+  if (!orderId) return;
+
+  console.log("[Global Status] Starting listener on order:", orderId);
+  previousStatus = null; // reset track for new order
+
+  const channel = supabaseClient.channel(`order_${orderId}`);
+  globalOrderUnsub = channel;
+
+  channel.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${orderId}` }, payload => {
+    const newStatus = payload.new.status || "new";
+    console.log("[Global Status] Update received:", newStatus);
+
+    if (previousStatus && previousStatus !== newStatus) {
+      showStatusToast(newStatus);
+    }
+    previousStatus = newStatus;
+
+    const currentHistory = JSON.parse(localStorage.getItem("orderHistory")) || [];
+    const idx = currentHistory.findIndex(x => x.supabaseId === orderId);
+    if (idx !== -1 && currentHistory[idx].status !== newStatus) {
+      currentHistory[idx].status = newStatus;
+      localStorage.setItem("orderHistory", JSON.stringify(currentHistory));
+    }
+
+    const receiptContainer = document.getElementById("receipt-status-container");
+    if (receiptContainer) {
+      receiptContainer.innerHTML = statusBadgeHtml(newStatus);
+      receiptContainer.style.transition = "opacity 0.2s";
+      receiptContainer.style.opacity = "0";
+      setTimeout(() => { receiptContainer.style.opacity = "1"; }, 200);
+    }
+
+    const historyContainer = document.getElementById(`history-status-${orderId}`);
+    if (historyContainer && historyContainer.innerHTML !== statusBadgeHtml(newStatus)) {
+      historyContainer.innerHTML = statusBadgeHtml(newStatus);
+      historyContainer.style.transition = "opacity 0.2s";
+      historyContainer.style.opacity = "0";
+      setTimeout(() => { historyContainer.style.opacity = "1"; }, 200);
+    }
+
+    if (newStatus === "completed" || newStatus === "cancelled") {
+      console.log("[Global Status] Order finished, stopping listener.");
+      supabaseClient.removeChannel(channel);
+      globalOrderUnsub = null;
+      activeOrderId = null;
+    }
+  }).subscribe();
 }
 
 function closeSuccess() {
   // Unsubscribe the live status listener so we don't leak it
-  if (_orderStatusUnsub) {
-    _orderStatusUnsub();
-    _orderStatusUnsub = null;
-    console.log("[Status] Listener unsubscribed.");
-  }
+  // Now handled by the global listener.
 
   const modal = document.getElementById("success-modal");
   if (!modal) return;
@@ -1047,7 +1111,7 @@ function closeSuccess() {
   if (form) form.reset();
 }
 
-let _historyUnsubs = [];
+// Removed _historyUnsubs
 
 function showOrderHistory() {
   const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
@@ -1056,10 +1120,6 @@ function showOrderHistory() {
   const container = document.getElementById("history-container");
 
   if (!body || !modal) return;
-
-  // Cleanup old listeners if any
-  _historyUnsubs.forEach(unsub => unsub());
-  _historyUnsubs = [];
 
   if (history.length === 0) {
     body.innerHTML = `<p class="text-gray-400 text-center py-8">No orders yet.</p>`;
@@ -1071,7 +1131,7 @@ function showOrderHistory() {
             <p class="gold-text font-bold">${o.orderId}</p>
             <p class="text-xs text-gray-400 mt-1">${new Date(o.orderDate).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })}</p>
           </div>
-          <div id="history-status-${o.firestoreId}">${statusBadgeHtml(o.status || "new")}</div>
+          <div id="history-status-${o.supabaseId}">${statusBadgeHtml(o.status || "new")}</div>
         </div>
         
         <div class="text-sm">
@@ -1098,32 +1158,7 @@ function showOrderHistory() {
         </div>
       </div>`).join("");
 
-    // Attach listeners
-    history.forEach(o => {
-      if (!o.firestoreId) return;
-      const unsub = db.collection("orders").doc(o.firestoreId).onSnapshot(doc => {
-        if (!doc.exists) return;
-        const newStatus = doc.data().status || "new";
-        
-        // Update localStorage so next time it opens it has the latest status
-        const currentHistory = JSON.parse(localStorage.getItem("orderHistory")) || [];
-        const idx = currentHistory.findIndex(x => x.firestoreId === o.firestoreId);
-        if (idx !== -1 && currentHistory[idx].status !== newStatus) {
-            currentHistory[idx].status = newStatus;
-            localStorage.setItem("orderHistory", JSON.stringify(currentHistory));
-        }
-
-        const statusContainer = document.getElementById(`history-status-${o.firestoreId}`);
-        if (statusContainer && statusContainer.innerHTML !== statusBadgeHtml(newStatus)) {
-          statusContainer.innerHTML = statusBadgeHtml(newStatus);
-          // Visual pulse to signal a live update
-          statusContainer.style.transition = "opacity 0.2s";
-          statusContainer.style.opacity = "0";
-          setTimeout(() => { statusContainer.style.opacity = "1"; }, 200);
-        }
-      });
-      _historyUnsubs.push(unsub);
-    });
+    // Removed local _historyUnsubs loop here, letting the global listener handle DOM updates
   }
 
   modal.classList.remove("hidden");
@@ -1139,20 +1174,19 @@ function showOrderHistory() {
 function closeHistoryModal() {
   const modal = document.getElementById("history-modal");
   const container = document.getElementById("history-container");
-  
+
   if (container) {
     container.classList.remove("translate-x-0");
     container.classList.add("translate-x-full");
   }
   modal.classList.add("opacity-0");
-  
+
   setTimeout(() => {
     modal.classList.remove("flex");
     modal.classList.add("hidden");
-    
+
     // Unsubscribe when closed
-    _historyUnsubs.forEach(unsub => unsub());
-    _historyUnsubs = [];
+    // Handled by global listener
   }, 300);
 }
 
@@ -1179,19 +1213,19 @@ async function reverseGeocode(lat, lng) {
 function autofillAddress(geo) {
   if (!geo || !geo.address) return;
   const a = geo.address;
-  
+
   // Use street name or a shortened version of the display_name to avoid excessive length
   const addressLine = a.road || geo.display_name?.split(",").slice(0, 2).join(",").trim() || "";
-  
+
   // Robust city fallback chain
-  const cityStr = a.city || a.town || a.municipality || a.village || a.county || "Unknown City";
-  
+  const cityStr = a.city || a.town || "Unknown City";
+
   // District logic (suburb or neighbourhood)
-  const districtStr = a.suburb || a.neighbourhood || a.village || "";
+  const districtStr = a.suburb || a.neighbourhood || "";
 
   const addressEl = document.getElementById("address");
-  const cityEl    = document.getElementById("city");
-  const districtEl  = document.getElementById("district");
+  const cityEl = document.getElementById("city");
+  const districtEl = document.getElementById("district");
 
   // Forcefully autofill so dragging the pin always updates the form
   if (addressEl) addressEl.value = addressLine;
@@ -1268,7 +1302,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const closeSuccessBtn = document.getElementById("close-success");
 
   sendBtn?.addEventListener("click", sendMessage);
-  input?.addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
+  input?.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
   cartBtn?.addEventListener("click", toggleCart);
   closeCartBtn?.addEventListener("click", toggleCart);
   cartOverlay?.addEventListener("click", toggleCart);
@@ -1277,6 +1316,17 @@ document.addEventListener("DOMContentLoaded", () => {
   closeCheckoutBtn?.addEventListener("click", closeCheckout);
   placeOrderBtn?.addEventListener("click", processOrder);
   closeSuccessBtn?.addEventListener("click", closeSuccess);
+
+  // ── Auto-Resume Global Listener ──────
+  const history = JSON.parse(localStorage.getItem("orderHistory")) || [];
+  const activeOrder = history.find(o =>
+    ["new", "pending", "processing", "ready", "delivering"].includes((o.status || "new").toLowerCase())
+  );
+  if (activeOrder && activeOrder.supabaseId) {
+    console.log("[Global] Resuming listener for active order:", activeOrder.supabaseId);
+    activeOrderId = activeOrder.supabaseId;
+    startGlobalOrderListener(activeOrderId);
+  }
 
   // ── Buyer typing indicator — signals the Seller panel ──────
   if (input) {
@@ -1295,7 +1345,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Init cart display
   updateCartCount();
 
-  // Start real-time Firebase chat listener
+  // Start real-time Supabase chat listener
   startChatListener();
-  console.log("[Buyer] startChatListener() called — onSnapshot active on:", CHAT_COLLECTION_PATH);
+  console.log("[Buyer] startChatListener() called — Supabase channel active");
 });
