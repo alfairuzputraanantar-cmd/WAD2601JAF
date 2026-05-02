@@ -6,16 +6,72 @@ const SUPABASE_KEY = "sb_publishable_aQgx6XXGRxZElZI_3FYGgg_3HMtn8TD";
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============================================================
-// SESSION ID — unique per browser tab so buyer/seller
-// messages can be distinguished in the same collection
+// CONVERSATION IDENTITY
+// Each buyer gets ONE conversation_id stored in localStorage + cookie.
 // ============================================================
-const SESSION_ID = localStorage.getItem("buyerSessionId") || (() => {
-  const id = "buyer_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
-  localStorage.setItem("buyerSessionId", id);
-  return id;
-})();
+let CONVERSATION_ID = null;  // set by getOrCreateConversation()
+let BUYER_NAME = null;       // set after name prompt
+
+/** Read cookie by name */
+function getCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Write a cookie (expires in 30 days) */
+function setCookie(name, value, days = 30) {
+  const expires = new Date(Date.now() + days * 864e5).toUTCString();
+  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+}
+
+/**
+ * getOrCreateConversation(buyerName)
+ * - Checks localStorage + cookie for an existing conversation_id.
+ * - If found, uses it (buyer is returning — skip Supabase insert).
+ * - If not found, creates a new row in "conversations" and stores the UUID.
+ */
+async function getOrCreateConversation(buyerName) {
+  // Try localStorage first, then cookie as fallback
+  let convId = localStorage.getItem('conversation_id') || getCookie('conversation_id');
+
+  if (convId) {
+    // Returning buyer — just resume the existing conversation
+    CONVERSATION_ID = convId;
+    BUYER_NAME = localStorage.getItem('buyer_name') || buyerName || getCookie('buyer_name') || 'Guest';
+    console.log('[Buyer] Resuming conversation:', CONVERSATION_ID);
+    return convId;
+  }
+
+  // New buyer — create a fresh conversation row in Supabase
+  const name = (buyerName || 'Guest').trim();
+  try {
+    const { data, error } = await supabaseClient
+      .from('conversations')
+      .insert([{ buyer_name: name }])
+      .select('id')
+      .single();
+
+    if (error) throw error;
+
+    CONVERSATION_ID = data.id;
+    BUYER_NAME = name;
+
+    // Persist in both localStorage and cookie
+    localStorage.setItem('conversation_id', data.id);
+    localStorage.setItem('buyer_name', name);
+    setCookie('conversation_id', data.id);
+    setCookie('buyer_name', name);
+
+    console.log('[Buyer] New conversation created:', CONVERSATION_ID, 'for', BUYER_NAME);
+    return data.id;
+  } catch (err) {
+    console.error('[Buyer] Failed to create conversation:', err);
+    return null;
+  }
+}
 
 console.log("[Buyer] Connected to Supabase");
+
 
 // ============================================================
 // RENDERED MESSAGE TRACKING — prevent duplicate renders
@@ -50,6 +106,7 @@ async function sendMessage() {
 
   const text = rawText.replace(/\n/g, " ").trim();
   if (!text) return;
+  if (!CONVERSATION_ID) { console.warn('[Buyer] No conversation yet — cannot send.'); return; }
 
   input.disabled = true;
   // Clear typing indicator immediately on send
@@ -59,7 +116,8 @@ async function sendMessage() {
     const { error } = await supabaseClient.from('messages').insert([{
       text,
       sender: "buyer",
-      session_id: "session_01",
+      conversation_id: CONVERSATION_ID,
+      session_id: "session_01",   // kept for backward-compat schema column
       type: "text"
       // created_at defaults to now() in Postgres
     }]);
@@ -386,9 +444,14 @@ function addToCartWithQty(product, qty) {
 }
 
 // ============================================================
-// SUPABASE REAL-TIME LISTENER — Messages
+// SUPABASE REAL-TIME LISTENER — Messages scoped to THIS buyer's conversation
 // ============================================================
 async function startChatListener() {
+  if (!CONVERSATION_ID) {
+    console.warn('[Buyer] startChatListener called before CONVERSATION_ID set — deferring.');
+    return;
+  }
+
   function renderIncomingMessage(msg) {
     if (renderedIds.has(msg.id)) return;
     renderedIds.add(msg.id);
@@ -403,10 +466,11 @@ async function startChatListener() {
     }
   }
 
-  // 1. Initial Fetch
+  // 1. Initial Fetch — only messages in this conversation
   const { data: existingDocs, error } = await supabaseClient
     .from('messages')
     .select('*')
+    .eq('conversation_id', CONVERSATION_ID)
     .order('created_at', { ascending: true });
 
   if (error) {
@@ -415,9 +479,14 @@ async function startChatListener() {
     existingDocs.forEach(renderIncomingMessage);
   }
 
-  // 2. Real-time Subscription
-  supabaseClient.channel('public:messages')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
+  // 2. Real-time Subscription — scoped to this conversation
+  supabaseClient.channel(`conv_${CONVERSATION_ID}`)
+    .on('postgres_changes', {
+      event: '*',
+      schema: 'public',
+      table: 'messages',
+      filter: `conversation_id=eq.${CONVERSATION_ID}`
+    }, payload => {
       if (payload.eventType === 'DELETE') {
         const docId = payload.old.id;
         renderedIds.delete(docId);
@@ -434,6 +503,8 @@ async function startChatListener() {
       }
     })
     .subscribe();
+
+  console.log('[Buyer] Chat listener active for conversation:', CONVERSATION_ID);
 }
 
 // ============================================================
@@ -477,29 +548,28 @@ async function deleteMessage(msgId) {
 }
 
 // ============================================================
-// CLEAR ALL MESSAGES — batch-delete every doc in the collection
-// Supabase supports standard SQL DELETE; this wrapper deletes a single message
-// we query all docs and delete in batches of 490.
-// The onSnapshot 'removed' events propagate to the Seller
-// in real-time, emptying their chat panel too.
+// CLEAR ALL MESSAGES — batch-delete every msg in THIS conversation
 // ============================================================
 async function clearAllMessages() {
-  if (!confirm("🗑️ Clear entire conversation?\n\nThis will remove ALL messages — including product cards — for both you and the Seller. This cannot be undone.")) return;
+  if (!CONVERSATION_ID) return;
+  if (!confirm("🗑️ Clear entire conversation?\n\nThis will remove ALL messages for both you and the Seller. This cannot be undone.")) return;
 
   const btn = document.getElementById("clear-chat-btn");
   if (btn) { btn.disabled = true; btn.style.opacity = "0.5"; }
 
   try {
-    const { error } = await supabaseClient.from('messages').delete().neq('sender', 'nobody_123'); // delete all records
+    const { error } = await supabaseClient
+      .from('messages')
+      .delete()
+      .eq('conversation_id', CONVERSATION_ID);
     if (error) throw error;
 
-    // Reset local counter; DOM is cleaned by onSnapshot 'removed' or by reload
     _msgCount = 0;
     updateMsgCount(0);
     showChatToast("💬 Conversation cleared.", "#4ade80");
-
-    // Quick DOM cleanup since we deleted them
-    document.getElementById("chat-window").innerHTML = "";
+    
+    // Only remove the message rows, keep the welcome bubble
+    document.querySelectorAll('#chat-window .chat-msg-row').forEach(el => el.remove());
   } catch (err) {
     console.error("clearAllMessages failed:", err);
     showChatToast("Could not clear chat. Check console.", "#ef4444");
@@ -812,7 +882,7 @@ async function processOrder() {
     const orderRef = { id: orderDataRes.id };
     console.log("[Order] Written to Supabase:", orderRef.id);
 
-    // ── STEP 3b: System notification → Seller Chat ─────────────────────
+    // ── STEP 3b: System notification → Seller Chat (scoped to THIS conversation) ──
     const totalUSD = (grandTotal / 15000).toFixed(2);
     await supabaseClient.from("messages").insert([{
       sender: "system",
@@ -820,6 +890,7 @@ async function processOrder() {
         " (Rp " + grandTotal.toLocaleString("id-ID") + ")" +
         " | Order: " + orderId +
         " | Buyer: " + fullName,
+      conversation_id: CONVERSATION_ID,
       session_id: "session_01",
       type: "text"
     }]);
@@ -839,6 +910,7 @@ async function processOrder() {
         supabaseClient.from('messages').insert([{
           sender: "buyer",
           text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name}. New stock: ${newStock}.`,
+          conversation_id: CONVERSATION_ID,
           session_id: "session_01",
           type: "text"
         }]);
@@ -848,6 +920,7 @@ async function processOrder() {
         supabaseClient.from('messages').insert([{
           sender: "buyer",
           text: `📦 Order #${orderId}: ${fullName} purchased ${item.quantity}× ${item.name} (custom item — no stock linked).`,
+          conversation_id: CONVERSATION_ID,
           session_id: "session_01",
           type: "text"
         }]);
@@ -1287,6 +1360,42 @@ function triggerMapLocate() {
 }
 
 // ============================================================
+// NAME PROMPT — shown on first visit
+// ============================================================
+function showNamePrompt() {
+  const modal = document.getElementById('name-prompt-modal');
+  if (modal) {
+    modal.style.display = 'flex';
+    setTimeout(() => document.getElementById('buyer-name-input')?.focus(), 100);
+  }
+}
+
+async function startChatWithName() {
+  const input = document.getElementById('buyer-name-input');
+  const err   = document.getElementById('name-prompt-error');
+  const btn   = document.getElementById('name-prompt-btn');
+  const name  = input?.value.trim();
+
+  if (!name) {
+    if (err) err.style.display = 'block';
+    input?.focus();
+    return;
+  }
+  if (err) err.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+
+  await getOrCreateConversation(name);
+
+  // Hide the modal
+  const modal = document.getElementById('name-prompt-modal');
+  if (modal) modal.style.display = 'none';
+
+  // Now start the chat listener with the conversation scoped
+  await startChatListener();
+  console.log('[Buyer] Chat started for:', BUYER_NAME);
+}
+
+// ============================================================
 // DOM READY — wire up all event listeners & start listener
 // ============================================================
 document.addEventListener("DOMContentLoaded", () => {
@@ -1345,7 +1454,19 @@ document.addEventListener("DOMContentLoaded", () => {
   // Init cart display
   updateCartCount();
 
-  // Start real-time Supabase chat listener
-  startChatListener();
-  console.log("[Buyer] startChatListener() called — Supabase channel active");
+  // ── Conversation bootstrap ──────────────────────────────────
+  // Check if buyer already has a conversation_id stored
+  const existingConvId   = localStorage.getItem('conversation_id') || getCookie('conversation_id');
+  const existingBuyerName = localStorage.getItem('buyer_name') || getCookie('buyer_name');
+
+  if (existingConvId && existingBuyerName) {
+    // Returning buyer — resume silently without showing the prompt
+    CONVERSATION_ID = existingConvId;
+    BUYER_NAME = existingBuyerName;
+    console.log('[Buyer] Returning buyer, resuming conversation:', CONVERSATION_ID);
+    startChatListener();
+  } else {
+    // New buyer — show the name prompt
+    showNamePrompt();
+  }
 });

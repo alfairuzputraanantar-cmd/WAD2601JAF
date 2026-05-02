@@ -464,6 +464,47 @@
         </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════════════════
+         BUYER NAME PROMPT MODAL (shown once on first visit)
+    ═══════════════════════════════════════════════════════════ -->
+    <div id="name-prompt-modal"
+        style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px);z-index:99999;align-items:center;justify-content:center;">
+        <div style="background:linear-gradient(145deg,#0d0d0d,#111);border:1px solid rgba(212,175,55,0.45);border-radius:20px;padding:36px 32px;max-width:380px;width:calc(100% - 40px);box-shadow:0 24px 80px rgba(0,0,0,0.8),0 0 0 1px rgba(212,175,55,0.1);animation:namePromptIn 0.4s cubic-bezier(0.34,1.56,0.64,1);">
+            <!-- Icon -->
+            <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,rgba(212,175,55,0.25),rgba(212,175,55,0.08));border:1px solid rgba(212,175,55,0.5);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;">
+                <svg width="26" height="26" fill="none" stroke="#D4AF37" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                </svg>
+            </div>
+            <!-- Heading -->
+            <h2 style="color:#D4AF37;font-family:'Orbitron',sans-serif;font-size:18px;font-weight:700;text-align:center;margin:0 0 6px;letter-spacing:0.5px;">Welcome to Tempat.</h2>
+            <p style="color:#6b7280;font-size:13px;text-align:center;margin:0 0 24px;line-height:1.5;">What should the seller call you?<br>Your name helps us serve you better.</p>
+            <!-- Input -->
+            <input type="text" id="buyer-name-input"
+                placeholder="Enter your name…"
+                maxlength="30"
+                style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.04);border:1px solid rgba(212,175,55,0.35);border-radius:10px;padding:13px 16px;color:#fff;font-size:14px;outline:none;transition:border-color 0.2s;margin-bottom:6px;"
+                onkeydown="if(event.key==='Enter')startChatWithName()"
+                onfocus="this.style.borderColor='rgba(212,175,55,0.7)'"
+                onblur="this.style.borderColor='rgba(212,175,55,0.35)'">
+            <p id="name-prompt-error" style="display:none;color:#ef4444;font-size:11px;margin:0 0 14px 2px;">Please enter your name to continue.</p>
+            <!-- Button -->
+            <button id="name-prompt-btn" onclick="startChatWithName()"
+                style="width:100%;padding:13px;background:linear-gradient(135deg,#D4AF37,#b8962e);border:none;border-radius:10px;color:#000;font-weight:700;font-size:14px;cursor:pointer;letter-spacing:0.5px;transition:all 0.2s;margin-top:8px;"
+                onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 20px rgba(212,175,55,0.4)'"
+                onmouseout="this.style.transform='';this.style.boxShadow=''">
+                Start Chatting →
+            </button>
+        </div>
+    </div>
+
+    <style>
+        @keyframes namePromptIn {
+            from { opacity:0; transform:scale(0.88) translateY(20px); }
+            to   { opacity:1; transform:scale(1) translateY(0); }
+        }
+    </style>
+
 
 
 
