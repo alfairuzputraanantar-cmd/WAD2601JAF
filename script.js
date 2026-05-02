@@ -122,11 +122,22 @@ async function sendMessage() {
       // created_at defaults to now() in Postgres
     }]);
 
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23503' || String(error.message).includes('foreign key')) {
+        console.warn('[Buyer] Conversation was deleted. Re-initializing...');
+        showChatToast("Session expired. Reconnecting...", "#f59e0b");
+        localStorage.removeItem('conversation_id');
+        setCookie('conversation_id', '', -1);
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
+      throw error;
+    }
   } catch (err) {
     console.error("Failed to send message:", err);
     // Restore input on error
     input.value = text;
+    showChatToast("Failed to send. Try again.", "#ef4444");
   } finally {
     input.disabled = false;
     input.focus();
